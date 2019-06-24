@@ -31,13 +31,17 @@ import net.fabricmc.loom.providers.MinecraftProvider;
 import net.fabricmc.loom.util.LoomDependencyManager;
 import org.cadixdev.lorenz.MappingSet;
 import org.cadixdev.mercury.Mercury;
+import org.gradle.api.Action;
 import org.gradle.api.Project;
 import org.gradle.api.UnknownDomainObjectException;
 import org.gradle.api.artifacts.Configuration;
 import org.gradle.api.artifacts.Dependency;
+import org.gradle.api.artifacts.ModuleDependency;
 import org.gradle.api.artifacts.component.ComponentIdentifier;
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier;
 import org.gradle.api.artifacts.result.ResolvedArtifactResult;
+import org.gradle.api.attributes.Attribute;
+import org.gradle.api.attributes.AttributeContainer;
 
 import javax.annotation.Nullable;
 import java.io.File;
@@ -54,6 +58,8 @@ public class LoomGradleExtension {
 	public boolean remapMod = true;
 	public boolean autoGenIDERuns = true;
 	public boolean extractJars = false;
+
+	Attribute debofAttribute;
 
 	private List<Path> unmappedModsBuilt = new ArrayList<>();
 
@@ -246,4 +252,9 @@ public class LoomGradleExtension {
 
 		return refmapName;
 	}
+
+	public ModuleDependency debof(ModuleDependency dependency){
+		return dependency.attributes(ac -> ac.attribute(debofAttribute, true));
+	}
+
 }

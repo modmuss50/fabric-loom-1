@@ -30,22 +30,25 @@ import net.fabricmc.loom.providers.MappingsProvider;
 import net.fabricmc.loom.providers.MinecraftProvider;
 import net.fabricmc.loom.task.RemapJarTask;
 import net.fabricmc.loom.task.RemapSourcesJarTask;
+import net.fabricmc.loom.transformers.DebofTransformer;
 import net.fabricmc.loom.util.*;
-import org.gradle.api.Plugin;
-import org.gradle.api.Project;
-import org.gradle.api.Task;
-import org.gradle.api.UnknownTaskException;
+import org.gradle.api.*;
 import org.gradle.api.artifacts.Configuration;
 import org.gradle.api.artifacts.Dependency;
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier;
 import org.gradle.api.artifacts.repositories.MavenArtifactRepository;
 import org.gradle.api.artifacts.result.DependencyResult;
 import org.gradle.api.artifacts.result.ResolvedDependencyResult;
+import org.gradle.api.attributes.Attribute;
+import org.gradle.api.attributes.AttributeContainer;
+import org.gradle.api.attributes.AttributesSchema;
 import org.gradle.api.plugins.JavaPlugin;
 import org.gradle.api.plugins.JavaPluginConvention;
+import org.gradle.api.plugins.ObjectConfigurationAction;
 import org.gradle.api.publish.Publication;
 import org.gradle.api.publish.PublishingExtension;
 import org.gradle.api.publish.maven.MavenPublication;
+import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.SourceSet;
 import org.gradle.api.tasks.bundling.AbstractArchiveTask;
 import org.gradle.api.tasks.compile.JavaCompile;
@@ -59,6 +62,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 public class AbstractPlugin implements Plugin<Project> {
@@ -83,7 +87,7 @@ public class AbstractPlugin implements Plugin<Project> {
 		project.apply(ImmutableMap.of("plugin", "eclipse"));
 		project.apply(ImmutableMap.of("plugin", "idea"));
 
-		project.getExtensions().create("minecraft", LoomGradleExtension.class, project);
+		project.getExtensions().create("loom", LoomGradleExtension.class, project);
 
 		LoomGradleExtension extension = project.getExtensions().getByType(LoomGradleExtension.class);
 		// Force add Mojang repository
@@ -130,6 +134,18 @@ public class AbstractPlugin implements Plugin<Project> {
 
 		extendsFrom("compile", Constants.MAPPINGS);
 		extendsFrom("annotationProcessor", Constants.MAPPINGS);
+
+		Attribute artifactType = Attribute.of("artifactType", String.class);
+		Attribute debofAttribute = Attribute.of("debof", Boolean.class);
+		extension.debofAttribute = debofAttribute;
+
+		project.getDependencies().attributesSchema(attributesSchema -> attributesSchema.attribute(artifactType));
+
+		project.getDependencies().registerTransform(DebofTransformer.class, spec -> {
+			spec.getFrom().attribute(debofAttribute, false).attribute(artifactType, "jar");
+			spec.getTo().attribute(debofAttribute, true).attribute(artifactType, "jar");
+			spec.parameters(parameters -> parameters.setProject(project));
+		});
 
 		configureIDEs();
 		configureCompile();

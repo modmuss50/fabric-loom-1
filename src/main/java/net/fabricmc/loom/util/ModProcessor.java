@@ -131,7 +131,7 @@ public class ModProcessor {
 		}))});
 	}
 
-	private static void remapJar(File input, File output, Project project) throws IOException {
+	public static void remapJar(File input, File output, Project project) throws IOException {
 		LoomGradleExtension extension = project.getExtensions().getByType(LoomGradleExtension.class);
 		String fromM = "intermediary";
 		String toM = "named";
