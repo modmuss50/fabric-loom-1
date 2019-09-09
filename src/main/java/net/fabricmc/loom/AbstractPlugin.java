@@ -291,6 +291,11 @@ public class AbstractPlugin implements Plugin<Project> {
 				flatDirectoryArtifactRepository.setName("UserLocalRemappedMods");
 			});
 
+			project1.getRepositories().maven(repo -> {
+				repo.setUrl(extension.getRemappedModCache().getAbsoluteFile());
+				repo.setName("UserLocalRemappedModsMaven");
+			});
+
 			project1.getRepositories().maven(mavenArtifactRepository -> {
 				mavenArtifactRepository.setName("Fabric");
 				mavenArtifactRepository.setUrl("https://maven.fabricmc.net/");

@@ -36,6 +36,8 @@ dependencies {
 	implementation ('org.zeroturnaround:zt-zip:1.13')
 	implementation ('com.google.code.gson:gson:2.8.5')
 	implementation ('com.google.guava:guava:28.0-jre')
+	implementation ('org.apache.commons:commons-lang3:3.9')
+	implementation ('org.apache.commons:commons-text:1.8')
 
 	// game handling utils
 	implementation ('net.fabricmc:stitch:0.2.1.60') {

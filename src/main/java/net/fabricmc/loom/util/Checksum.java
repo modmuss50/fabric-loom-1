@@ -41,17 +41,21 @@ public class Checksum {
 			return false;
 		}
 		try {
-			//noinspection deprecation
-			HashCode hash = Files.asByteSource(file).hash(Hashing.sha1());
-			StringBuilder builder = new StringBuilder();
-			for (Byte hashBytes : hash.asBytes()) {
-				builder.append(Integer.toString((hashBytes & 0xFF) + 0x100, 16).substring(1));
-			}
-			log.debug("Checksum check: '" + builder.toString() + "' == '" + checksum + "'?");
-			return builder.toString().equals(checksum);
+			String hash = get(file);
+			log.debug("Checksum check: '" + hash + "' == '" + checksum + "'?");
+			return hash.equals(checksum);
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
 		return false;
+	}
+
+	public static String get(File file) throws IOException {
+		HashCode hash = Files.asByteSource(file).hash(Hashing.sha1());
+		StringBuilder builder = new StringBuilder();
+		for (Byte hashBytes : hash.asBytes()) {
+			builder.append(Integer.toString((hashBytes & 0xFF) + 0x100, 16).substring(1));
+		}
+		return builder.toString();
 	}
 }

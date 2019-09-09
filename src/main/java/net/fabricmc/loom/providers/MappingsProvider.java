@@ -50,6 +50,7 @@ public class MappingsProvider extends DependencyProvider {
 	public String mappingsName;
 	public String minecraftVersion;
 	public String mappingsVersion;
+	public String version;
 
 	public File MAPPINGS_DIR;
 	public File MAPPINGS_TINY_BASE;
@@ -71,6 +72,7 @@ public class MappingsProvider extends DependencyProvider {
 
 		this.mappingsName = dependency.getDependency().getGroup() + "." + dependency.getDependency().getName();
 
+		this.version = version;
 		Version mappingsVersion = new Version(version);
 		this.minecraftVersion = mappingsVersion.getMinecraftVersion();
 		this.mappingsVersion = mappingsVersion.getMappingsVersion();
