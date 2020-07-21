@@ -52,6 +52,7 @@ import org.zeroturnaround.zip.transform.ZipEntryTransformerEntry;
 
 import net.fabricmc.mappings.EntryTriple;
 import net.fabricmc.loom.LoomGradleExtension;
+import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.Checksum;
 import net.fabricmc.loom.processors.JarProcessor;
 import net.fabricmc.tinyremapper.TinyRemapper;
@@ -177,7 +178,7 @@ public class AccessWidenerJarProcessor implements JarProcessor {
 		private int classAccess;
 
 		private AccessTransformer(ClassVisitor classVisitor) {
-			super(Opcodes.ASM7, classVisitor);
+			super(Constants.ASM_VERSION, classVisitor);
 		}
 
 		@Override
@@ -228,7 +229,7 @@ public class AccessWidenerJarProcessor implements JarProcessor {
 
 		private class AccessWidenerMethodVisitor extends MethodVisitor {
 			AccessWidenerMethodVisitor(MethodVisitor methodVisitor) {
-				super(Opcodes.ASM7, methodVisitor);
+				super(Constants.ASM_VERSION, methodVisitor);
 			}
 
 			@Override

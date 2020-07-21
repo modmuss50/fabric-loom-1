@@ -32,6 +32,7 @@ import java.util.List;
 import org.gradle.api.Project;
 
 import net.fabricmc.loom.util.accesswidener.AccessWidenerJarProcessor;
+import net.fabricmc.loom.util.mixin.baked.PrebakedMixinJarProcessor;
 import net.fabricmc.loom.LoomGradleExtension;
 
 public class JarProcessorManager {
@@ -54,6 +55,10 @@ public class JarProcessorManager {
 			jarProcessors.add(new AccessWidenerJarProcessor());
 		}
 
+		if (extension.prebakeMixins_THIS_WILL_BREAK_THINGS) {
+			jarProcessors.add(new PrebakedMixinJarProcessor());
+		}
+
 		jarProcessors.forEach(jarProcessor -> jarProcessor.setup(project));
 		return Collections.unmodifiableList(jarProcessors);
 	}
@@ -73,6 +78,12 @@ public class JarProcessorManager {
 	public void process(File file) {
 		for (JarProcessor jarProcessor : jarProcessors) {
 			jarProcessor.process(file);
+		}
+	}
+
+	public void postProcess(File file) {
+		for (JarProcessor jarProcessor : jarProcessors) {
+			jarProcessor.postProcess(file);
 		}
 	}
 

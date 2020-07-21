@@ -22,18 +22,18 @@
  * SOFTWARE.
  */
 
-package net.fabricmc.loom.processors;
+package org.spongepowered.asm.mixin.transformer;
 
-import java.io.File;
+import org.spongepowered.asm.mixin.MixinEnvironment;
 
-import org.gradle.api.Project;
+public class FabricMixinTransformerProxy {
+	private final MixinTransformer transformer = new MixinTransformer();
 
-public interface JarProcessor {
-	void setup(Project project);
+	public byte[] transformClassBytes(String name, String transformedName, byte[] basicClass) {
+		return transformer.transformClassBytes(name, transformedName, basicClass);
+	}
 
-	void process(File file);
-
-	default void postProcess(File file) { }
-
-	boolean isInvalid(File file);
+	public void audit(MixinEnvironment environment) {
+		transformer.audit(environment);
+	}
 }

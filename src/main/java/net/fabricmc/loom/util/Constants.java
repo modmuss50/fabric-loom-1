@@ -27,6 +27,7 @@ package net.fabricmc.loom.util;
 import java.util.List;
 
 import com.google.common.collect.ImmutableList;
+import org.objectweb.asm.Opcodes;
 
 public class Constants {
 	public static final String DEFAULT_FABRIC_CLIENT_TWEAKER = "net.fabricmc.loader.launch.FabricClientTweaker";
@@ -57,4 +58,6 @@ public class Constants {
 	public static final String MIXIN_COMPILE_EXTENSIONS_VERSION = "0.3.1.5";
 	public static final String DEV_LAUNCH_INJECTOR_VERSION = "0.2.1+build.8";
 	public static final String TERMINAL_CONSOLE_APPENDER_VERSION = "1.2.0";
+
+	public static final int ASM_VERSION = Opcodes.ASM8;
 }

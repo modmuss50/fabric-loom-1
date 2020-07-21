@@ -22,18 +22,22 @@
  * SOFTWARE.
  */
 
-package net.fabricmc.loom.processors;
+package net.fabricmc.loom.util.mixin.baked;
 
-import java.io.File;
+import org.spongepowered.asm.service.IMixinServiceBootstrap;
 
-import org.gradle.api.Project;
+public class LoomMixinServiceBootstrap implements IMixinServiceBootstrap {
+	@Override
+	public String getName() {
+		return "Loom";
+	}
 
-public interface JarProcessor {
-	void setup(Project project);
+	@Override
+	public String getServiceClassName() {
+		return "net.fabricmc.loom.util.mixin.baked.MixinServiceLoom";
+	}
 
-	void process(File file);
-
-	default void postProcess(File file) { }
-
-	boolean isInvalid(File file);
+	@Override
+	public void bootstrap() {
+	}
 }

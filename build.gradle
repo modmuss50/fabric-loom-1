@@ -64,6 +64,11 @@ dependencies {
 	// Kapt integration
 	compileOnly("org.jetbrains.kotlin:kotlin-gradle-plugin:1.3.72")
 
+	// Mixin prebaking
+	implementation ('net.fabricmc:sponge-mixin:0.8+build.18') {
+		transitive = false
+	}
+
 	// Testing
 	testImplementation(gradleTestKit())
 	testImplementation("org.spockframework:spock-core:1.3-groovy-2.4") {
@@ -91,6 +96,7 @@ apply from: 'https://github.com/FabricMC/fabric-docs/raw/master/gradle/license.g
 
 license {
 	exclude '**/loom/util/DownloadUtil.java'
+	exclude '**/MixinIntermediaryDevRemapper.java'
 }
 
 checkstyle {

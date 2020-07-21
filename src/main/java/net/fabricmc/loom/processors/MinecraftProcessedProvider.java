@@ -61,6 +61,8 @@ public class MinecraftProcessedProvider extends MinecraftMappedProvider {
 			}
 
 			jarProcessorManager.process(projectMappedJar);
+
+			postPopulationScheduler.accept(() -> jarProcessorManager.postProcess(projectMappedJar));
 		}
 
 		getProject().getRepositories().flatDir(repository -> repository.dir(getJarDirectory(getExtension().getProjectPersistentCache(), PROJECT_MAPPED_CLASSIFIER)));
