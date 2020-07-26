@@ -18,7 +18,9 @@ jobs:
           - java: jdk11
             gradle: 4.10.2
     runs-on: ubuntu-20.04
-    container: gradle:${{ matrix.gradle }}-${{ matrix.java }}
+    container:
+      image: gradle:${{ matrix.gradle }}-${{ matrix.java }}
+      options: --user root
     steps:
       - uses: actions/checkout@v1
       - uses: gradle/wrapper-validation-action@v1
