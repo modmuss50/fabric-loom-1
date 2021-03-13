@@ -131,6 +131,7 @@ jobs:
       - run: ./gradle-profiler-0.16.0/bin/gradle-profiler --gradle-version 6.8.3 --output-dir ./build/profile-results --profile async-profiler --project-dir ./fabric --scenario-file ./.github/profile.conf build
       # Upload the results
       - uses: actions/upload-artifact@v2
+        if: ${{ always() }}
         with:
           name: Fabric API Build Profile Results (${{ matrix.java }})
           path: build/profile-results/
