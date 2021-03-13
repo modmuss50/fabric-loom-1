@@ -103,7 +103,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        java: [ jdk8, jdk11, jdk15 ]
+        java: [ jdk11, jdk15 ]
 
     runs-on: ubuntu-20.04
     container:
@@ -112,13 +112,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
-      # Install profiler
-      - run: apt update
-      - run: apt install wget unzip -y
-      - run: wget https://repo.gradle.org/gradle/ext-releases-local/org/gradle/profiler/gradle-profiler/0.16.0/gradle-profiler-0.16.0.zip -O gradle-profiler.zip
-      - run: unzip gradle-profiler.zip
-      - run: sh -c " echo 1 > /proc/sys/kernel/perf_event_paranoid"
-      - run: sh -c " echo 0 > /proc/sys/kernel/kptr_restrict"
       # Checkout a known working commit of fabric api
       - uses: actions/checkout@v2
         with:
@@ -130,7 +123,7 @@ jobs:
       # Patch fabric to use the local build of loom
       - run: sed 's/0.5.43/0.7.local/g' ./fabric/build.gradle
       # Run the with the profiler
-      - run: ./gradle-profiler-0.16.0/bin/gradle-profiler --gradle-version 6.8.3 --output-dir ./build/profile-results --profile async-profiler --project-dir ./fabric --scenario-file ./.github/profile.conf build
+      - run: ./gradle-profiler-0.16.0/bin/gradle-profiler --gradle-version 6.8.3 --output-dir ./build/profile-results --profile jfr --project-dir ./fabric --scenario-file ./.github/profile.conf build
       # Upload the results
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}
