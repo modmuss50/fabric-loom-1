@@ -115,7 +115,7 @@ jobs:
       # Install profiler
       - run: apt update
       - run: apt install zip -y
-      - run: curl -s "https://get.sdkman.io?rcupdate=false" | bash
+      - run: curl -s "https://get.sdkman.io?rcupdate=false" | bash && source "/github/home/.sdkman/bin/sdkman-init.sh"
       - run: sdk install gradleprofiler 0.16.0
       # Checkout a known working commit of fabric api
       - uses: actions/checkout@v2
