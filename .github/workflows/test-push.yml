@@ -113,11 +113,8 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       # Install profiler
-      - uses: sdkman/sdkman-action@master
-        id: sdkman
-        with:
-          candidate: gradleprofiler
-          version: 0.16.0
+      - run: curl -s "https://get.sdkman.io?rcupdate=false" | bash
+      - run: sdk install gradleprofiler 0.16.0
       # Checkout a known working commit of fabric api
       - uses: actions/checkout@v2
         with:
