@@ -95,3 +95,43 @@ jobs:
         with:
           name: Reproducible Build ${{ matrix.os }} (${{ matrix.java }}) Results
           path: build/reports/
+
+  # Profile a fabric api build
+  fabric_api_profile:
+    needs: build
+
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [ jdk8, jdk11, jdk15 ]
+
+    runs-on: ubuntu-20.04
+    container:
+      image: gradle:6.8.3-${{ matrix.java }}
+      options: --user root
+
+    steps:
+      - uses: actions/checkout@v2
+      # Install profiler
+      - uses: sdkman/sdkman-action@master
+        id: sdkman
+        with:
+          candidate: gradleprofiler
+          version: 0.16.0
+      # Checkout a known working commit of fabric api
+      - uses: actions/checkout@v2
+        with:
+          repository: FabricMC/fabric
+          ref: 1e6c71f9bcb3fe386d9fa8030d061b37b9afe31e
+          path: fabric
+      # Build loom
+      - run: gradle build publishToMavenLocal -x test --stacktrace
+      # Patch fabric to use the local build of loom
+      - run: sed 's/0.5.43/0.7.local/g' ./fabric/build.gradle
+      # Run the with the profiler
+      - run: gradle-profiler --output-dir ./build/profile-results --profile async-profiler --project-dir ./fabric --scenario-file ./.github/profile.conf build
+      # Upload the results
+      - uses: actions/upload-artifact@v2
+        with:
+          name: Fabric API Build Profile Results (${{ matrix.java }})
+          path: build/profile-results/
