@@ -114,9 +114,9 @@ jobs:
       - uses: actions/checkout@v2
       # Install profiler
       - run: apt update
-      - run: apt install zip -y
-      - run: curl -s "https://get.sdkman.io?rcupdate=false" | bash && source "/github/home/.sdkman/bin/sdkman-init.sh"
-      - run: sdk install gradleprofiler 0.16.0
+      - run: apt install wget unzip -y
+      - run: wget https://repo.gradle.org/gradle/ext-releases-local/org/gradle/profiler/gradle-profiler/0.16.0/gradle-profiler-0.16.0.zip -O gradle-profiler.zip
+      - run: unzip gradle-profiler.zip
       # Checkout a known working commit of fabric api
       - uses: actions/checkout@v2
         with:
@@ -128,7 +128,7 @@ jobs:
       # Patch fabric to use the local build of loom
       - run: sed 's/0.5.43/0.7.local/g' ./fabric/build.gradle
       # Run the with the profiler
-      - run: gradle-profiler --output-dir ./build/profile-results --profile async-profiler --project-dir ./fabric --scenario-file ./.github/profile.conf build
+      - run: ./gradle-profiler-0.16.0/bin/gradle-profiler --output-dir ./build/profile-results --profile async-profiler --project-dir ./fabric --scenario-file ./.github/profile.conf build
       # Upload the results
       - uses: actions/upload-artifact@v2
         with:
