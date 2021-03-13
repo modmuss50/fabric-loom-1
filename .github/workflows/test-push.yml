@@ -113,6 +113,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       # Install profiler
+      - run: apt update
       - run: apt install zip -y
       - run: curl -s "https://get.sdkman.io?rcupdate=false" | bash
       - run: sdk install gradleprofiler 0.16.0
