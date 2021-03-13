@@ -108,7 +108,7 @@ jobs:
     runs-on: ubuntu-20.04
     container:
       image: gradle:6.8.3-${{ matrix.java }}
-      options: --user root
+      options: --user root --security-opt seccomp=unconfined --cap-add SYS_ADMIN
 
     steps:
       - uses: actions/checkout@v2
