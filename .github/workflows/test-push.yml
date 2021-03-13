@@ -117,8 +117,8 @@ jobs:
       - run: apt install wget unzip -y
       - run: wget https://repo.gradle.org/gradle/ext-releases-local/org/gradle/profiler/gradle-profiler/0.16.0/gradle-profiler-0.16.0.zip -O gradle-profiler.zip
       - run: unzip gradle-profiler.zip
-      - run: sysctl kernel.perf_event_paranoid=1
-      - run: sysctl kernel.kptr_restrict=0
+      - run: sh -c " echo 1 > /proc/sys/kernel/perf_event_paranoid"
+      - run: sh -c " echo 0 > /proc/sys/kernel/kptr_restrict"
       # Checkout a known working commit of fabric api
       - uses: actions/checkout@v2
         with:
