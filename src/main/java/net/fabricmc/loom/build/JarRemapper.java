@@ -24,6 +24,7 @@
 
 package net.fabricmc.loom.build;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -33,6 +34,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 
 import org.gradle.api.Action;
 import org.objectweb.asm.commons.Remapper;
@@ -48,6 +50,7 @@ public class JarRemapper {
 	private final Set<Path> classPath = new HashSet<>();
 	private final List<RemapData> remapData = new ArrayList<>();
 	private List<Action<TinyRemapper.Builder>> remapOptions;
+	private Consumer<File> outputFileConsumer = file -> { };
 
 	public void addMappings(IMappingProvider mappingProvider) {
 		mappingProviders.add(mappingProvider);
@@ -60,6 +63,7 @@ public class JarRemapper {
 	public RemapData scheduleRemap(Path input, Path output) {
 		RemapData data = new RemapData(input, output);
 		remapData.add(data);
+		outputFileConsumer.accept(output.toFile());
 		return data;
 	}
 
@@ -112,6 +116,11 @@ public class JarRemapper {
 
 	public void addOptions(List<Action<TinyRemapper.Builder>> remapOptions) {
 		this.remapOptions = remapOptions;
+	}
+
+	public JarRemapper setOutputFileConsumer(Consumer<File> outputFileConsumer) {
+		this.outputFileConsumer = outputFileConsumer;
+		return this;
 	}
 
 	public static class RemapData {

@@ -54,6 +54,7 @@ public class SourceRemapper {
 	private final Project project;
 	private final boolean toNamed;
 	private final List<Consumer<ProgressLogger>> remapTasks = new ArrayList<>();
+	private Consumer<File> outputFileConsumer = file -> { };
 
 	private Mercury mercury;
 
@@ -69,6 +70,7 @@ public class SourceRemapper {
 	}
 
 	public void scheduleRemapSources(File source, File destination, boolean reproducibleFileOrder, boolean preserveFileTimestamps) {
+		outputFileConsumer.accept(destination);
 		remapTasks.add((logger) -> {
 			try {
 				logger.progress("remapping sources - " + source.getName());
@@ -247,5 +249,10 @@ public class SourceRemapper {
 		String name = path.getFileName().toString();
 		// ".java" is not a valid java file
 		return name.endsWith(".java") && name.length() != 5;
+	}
+
+	public SourceRemapper setOutputFileConsumer(Consumer<File> outputFileConsumer) {
+		this.outputFileConsumer = outputFileConsumer;
+		return this;
 	}
 }

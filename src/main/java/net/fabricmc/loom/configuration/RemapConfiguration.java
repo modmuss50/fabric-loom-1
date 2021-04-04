@@ -37,7 +37,7 @@ import org.jetbrains.annotations.ApiStatus;
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.build.JarRemapper;
 import net.fabricmc.loom.build.nesting.NestedDependencyProvider;
-import net.fabricmc.loom.task.AbstractLoomTask;
+import net.fabricmc.loom.task.RemapAllJarsTask;
 import net.fabricmc.loom.task.RemapAllSourcesTask;
 import net.fabricmc.loom.task.RemapJarTask;
 import net.fabricmc.loom.task.RemapSourcesJarTask;
@@ -107,12 +107,14 @@ public class RemapConfiguration {
 
 				rootProject.getTasks().register(remapAllSourcesTaskName, RemapAllSourcesTask.class, task -> {
 					task.sourceRemapper = sourceRemapper;
+					sourceRemapper.setOutputFileConsumer(file -> task.getOutputFiles().plus(project.files(file)));
 					task.doLast(t -> sourceRemapper.remapAll());
 				});
 
 				parentTask = rootProject.getTasks().getByName(remapAllSourcesTaskName);
 
-				rootProject.getTasks().register(remapAllJarsTaskName, AbstractLoomTask.class, task -> {
+				rootProject.getTasks().register(remapAllJarsTaskName, RemapAllJarsTask.class, task -> {
+					jarRemapper.setOutputFileConsumer(file -> task.getOutputFiles().plus(project.files(file)));
 					task.doLast(t -> {
 						try {
 							jarRemapper.remap();

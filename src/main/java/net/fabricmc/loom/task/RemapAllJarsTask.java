@@ -25,21 +25,11 @@
 package net.fabricmc.loom.task;
 
 import org.gradle.api.file.FileCollection;
-import org.gradle.api.tasks.Internal;
 import org.gradle.api.tasks.OutputFiles;
 
-import net.fabricmc.loom.util.SourceRemapper;
-
-public class RemapAllSourcesTask extends AbstractLoomTask {
-	public SourceRemapper sourceRemapper;
-
+public class RemapAllJarsTask extends AbstractLoomTask {
 	@OutputFiles
 	private final FileCollection outputFiles = getProject().files();
-
-	@Internal
-	public SourceRemapper getSourceRemapper() {
-		return sourceRemapper;
-	}
 
 	public FileCollection getOutputFiles() {
 		return outputFiles;
