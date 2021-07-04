@@ -28,6 +28,8 @@ import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 
+import net.fabricmc.loom.configuration.providers.mappings.tiny.MappingIOSpecBuilder;
+
 import org.gradle.api.Action;
 
 import net.fabricmc.loom.configuration.providers.mappings.intermediary.IntermediaryMappingsSpec;
@@ -39,6 +41,13 @@ public class LayeredMappingSpecBuilder {
 
 	public LayeredMappingSpecBuilder officialMojangMappings() {
 		layers.add(new MojangMappingsSpec());
+		return this;
+	}
+
+	public LayeredMappingSpecBuilder mapping(Action<MappingIOSpecBuilder> action) {
+		var builder = new MappingIOSpecBuilder();
+		action.execute(builder);
+		layers.add(builder.build());
 		return this;
 	}
 

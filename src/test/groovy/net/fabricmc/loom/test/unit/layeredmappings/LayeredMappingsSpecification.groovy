@@ -63,7 +63,7 @@ abstract class LayeredMappingsSpecification extends Specification implements Lay
     }
 
     File extractFileFromZip(File zipFile, String name) {
-        File dst = new File(tempDir, name)
+        File dst = new File(tempDir, zipFile.name + "_" + name)
         dst.parentFile.mkdirs()
 
         new ZipFile(zipFile).withCloseable {

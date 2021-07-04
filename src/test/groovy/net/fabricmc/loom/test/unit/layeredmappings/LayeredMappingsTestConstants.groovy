@@ -30,6 +30,8 @@ interface LayeredMappingsTestConstants {
     public static final String INTERMEDIARY_1_17_URL = "https://maven.fabricmc.net/net/fabricmc/intermediary/1.17/intermediary-1.17-v2.jar"
     public static final String INTERMEDIARY_1_16_5_URL = "https://maven.fabricmc.net/net/fabricmc/intermediary/1.16.5/intermediary-1.16.5-v2.jar"
 
+    public static final String YARN_1_17_URL = "https://maven.fabricmc.net/net/fabricmc/yarn/1.17%2Bbuild.13/yarn-1.17%2Bbuild.13-v2.jar"
+
     public static final Map<String, MinecraftVersionMeta.Download> DOWNLOADS_1_17 = [
             client_mappings:new MinecraftVersionMeta.Download(null, "227d16f520848747a59bef6f490ae19dc290a804", 6431705, "https://launcher.mojang.com/v1/objects/227d16f520848747a59bef6f490ae19dc290a804/client.txt"),
             server_mappings:new MinecraftVersionMeta.Download(null, "84d80036e14bc5c7894a4fad9dd9f367d3000334", 4948536, "https://launcher.mojang.com/v1/objects/84d80036e14bc5c7894a4fad9dd9f367d3000334/server.txt")
