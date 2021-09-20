@@ -26,6 +26,7 @@ package net.fabricmc.loom.test.integration
 
 import net.fabricmc.loom.test.util.GradleProjectTestTrait
 import net.fabricmc.loom.test.util.ServerRunner
+import spock.lang.Shared
 import spock.lang.Specification
 import spock.lang.Timeout
 import spock.lang.Unroll
@@ -39,31 +40,57 @@ import static org.gradle.testkit.runner.TaskOutcome.SUCCESS
 class FabricAPITest extends Specification implements GradleProjectTestTrait {
 	private static final String API_VERSION = "0.0.0+loom"
 
+	@Shared
+	private static File gradleHomeDir = File.createTempDir()
+
 	@Unroll
 	def "build and run (gradle #version)"() {
 		setup:
 			def gradle = gradleProject(
 					repo: "https://github.com/FabricMC/fabric.git",
-					commit: "46582230fb580d4c1f71e4b0737df27417ec9cb1",
+					commit: "fb712d3a80bb6714209e35a6163deb854aacb14b",
 					version: version,
-					patch: "fabric_api"
+					gradleHomeDir: gradleHomeDir
 			)
 
 			// Set the version to something constant
 			gradle.buildGradle.text = gradle.buildGradle.text.replace('Globals.baseVersion + "+" + (ENV.GITHUB_RUN_NUMBER ? "" : "local-") + getBranch()', "\"$API_VERSION\"")
 
-			def server = ServerRunner.create(gradle.projectDir, "1.17.1")
+			def server = ServerRunner.create(gradle.projectDir, "21w37a")
 										.withMod(gradle.getOutputFile("fabric-api-${API_VERSION}.jar"))
+
+			def depGradle = gradleProject(
+					project: "minimalBase",
+					version: version,
+					gradleHomeDir: gradleHomeDir
+			)
+
+			depGradle.buildGradle << """
+				repositories {
+					mavenLocal()
+				}
+	
+				dependencies {
+					minecraft "com.mojang:minecraft:21w37a"
+					mappings "net.fabricmc:yarn:21w37a+build.10:v2"
+					modImplementation "net.fabricmc:fabric-loader:0.11.7"
+					modImplementation "net.fabricmc.fabric-api:fabric-api:${API_VERSION}"
+				}
+			"""
 		when:
-			def result = gradle.run(tasks: ["build", "publishToMavenLocal"], args: ["--parallel", "-x", "check"]) // Note: checkstyle does not appear to like being ran in a test runner
+			def result = gradle.run(tasks: ["clean", "build", "publishToMavenLocal"], args: ["--parallel", "-x", "check"]) // Note: checkstyle does not appear to like being ran in a test runner
 			gradle.printOutputFiles()
 
 			def serverResult = server.run()
+
+			def depResult = depGradle.run(tasks: ["clean", "build"])
 		then:
 			result.task(":build").outcome == SUCCESS
 
 			serverResult.successful()
 			serverResult.output.contains("fabric@$API_VERSION")
+
+			depResult.task(":build").outcome == SUCCESS
 		where:
 			version << STANDARD_TEST_VERSIONS
 	}
