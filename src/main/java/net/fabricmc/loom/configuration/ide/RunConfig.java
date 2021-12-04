@@ -174,7 +174,7 @@ public class RunConfig {
 	public String fromDummy(String dummy, boolean relativeDir, Project project) throws IOException {
 		String dummyConfig;
 
-		try (InputStream input = SetupIntelijRunConfigs.class.getClassLoader().getResourceAsStream(dummy)) {
+		try (InputStream input = RunConfig.class.getClassLoader().getResourceAsStream(dummy)) {
 			dummyConfig = new String(input.readAllBytes(), StandardCharsets.UTF_8);
 		}
 

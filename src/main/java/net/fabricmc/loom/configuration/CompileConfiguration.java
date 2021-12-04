@@ -39,7 +39,6 @@ import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.build.mixin.JavaApInvoker;
 import net.fabricmc.loom.build.mixin.KaptApInvoker;
 import net.fabricmc.loom.build.mixin.ScalaApInvoker;
-import net.fabricmc.loom.configuration.ide.SetupIntelijRunConfigs;
 import net.fabricmc.loom.configuration.providers.LaunchProvider;
 import net.fabricmc.loom.configuration.providers.MinecraftProviderImpl;
 import net.fabricmc.loom.configuration.providers.mappings.MappingsProviderImpl;
@@ -140,7 +139,6 @@ public final class CompileConfiguration {
 			project.getTasks().getByName("eclipse").finalizedBy(project.getTasks().getByName("genEclipseRuns"));
 			project.getTasks().getByName("cleanEclipse").finalizedBy(project.getTasks().getByName("cleanEclipseRuns"));
 
-			SetupIntelijRunConfigs.setup(project);
 			extension.getRemapArchives().finalizeValue();
 
 			// Enables the default mod remapper
