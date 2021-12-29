@@ -24,6 +24,8 @@
 
 package net.fabricmc.loom.extension;
 
+import net.fabricmc.loom.configuration.production.ProductionRunConfigSettings;
+
 import org.gradle.api.Action;
 import org.gradle.api.DomainObjectCollection;
 import org.gradle.api.NamedDomainObjectContainer;
@@ -67,10 +69,13 @@ public abstract class LoomGradleExtensionApiImpl implements LoomGradleExtensionA
 	private final ModVersionParser versionParser;
 
 	private NamedDomainObjectContainer<RunConfigSettings> runConfigs;
+	private NamedDomainObjectContainer<ProductionRunConfigSettings> productionConfigs;
 
 	protected LoomGradleExtensionApiImpl(Project project, LoomFiles directories) {
 		this.runConfigs = project.container(RunConfigSettings.class,
 				baseName -> new RunConfigSettings(project, baseName));
+		this.productionConfigs = project.container(ProductionRunConfigSettings.class,
+				baseName -> project.getObjects().named(ProductionRunConfigSettings.class, baseName));
 		this.decompilers = project.getObjects().domainObjectSet(LoomDecompiler.class);
 		this.jarProcessors = project.getObjects().listProperty(JarProcessor.class)
 				.empty();
@@ -140,6 +145,16 @@ public abstract class LoomGradleExtensionApiImpl implements LoomGradleExtensionA
 	@Override
 	public NamedDomainObjectContainer<RunConfigSettings> getRunConfigs() {
 		return runConfigs;
+	}
+
+	@Override
+	public void productionRuns(Action<NamedDomainObjectContainer<ProductionRunConfigSettings>> action) {
+		action.execute(productionConfigs);
+	}
+
+	@Override
+	public NamedDomainObjectContainer<ProductionRunConfigSettings> getProductionRunConfigs() {
+		return productionConfigs;
 	}
 
 	@Override

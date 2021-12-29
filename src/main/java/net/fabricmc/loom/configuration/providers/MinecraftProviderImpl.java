@@ -320,4 +320,12 @@ public class MinecraftProviderImpl extends DependencyProvider implements Minecra
 	public BundleMetadata getServerBundleMetadata() {
 		return serverBundleMetadata;
 	}
+
+	public File getMinecraftClientJar() {
+		return minecraftClientJar;
+	}
+
+	public File getMinecraftServerJar() {
+		return minecraftServerJar;
+	}
 }

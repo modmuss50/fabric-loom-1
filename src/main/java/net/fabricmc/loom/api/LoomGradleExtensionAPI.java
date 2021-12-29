@@ -24,6 +24,8 @@
 
 package net.fabricmc.loom.api;
 
+import net.fabricmc.loom.configuration.production.ProductionRunConfigSettings;
+
 import org.gradle.api.Action;
 import org.gradle.api.DomainObjectCollection;
 import org.gradle.api.NamedDomainObjectContainer;
@@ -80,7 +82,11 @@ public interface LoomGradleExtensionAPI {
 
 	void runs(Action<NamedDomainObjectContainer<RunConfigSettings>> action);
 
+	void productionRuns(Action<NamedDomainObjectContainer<ProductionRunConfigSettings>> action);
+
 	NamedDomainObjectContainer<RunConfigSettings> getRunConfigs();
+
+	NamedDomainObjectContainer<ProductionRunConfigSettings> getProductionRunConfigs();
 
 	void mixin(Action<MixinExtensionAPI> action);
 
