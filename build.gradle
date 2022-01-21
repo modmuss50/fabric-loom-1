@@ -184,7 +184,7 @@ jacocoTestReport {
 }
 
 test {
-	maxHeapSize = "2048m"
+	maxHeapSize = "1536m"
 	useJUnitPlatform()
 }
 
