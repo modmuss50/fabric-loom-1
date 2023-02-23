@@ -84,6 +84,10 @@ public final class SourceSetHelper {
 		return getSourceSetByName(SourceSet.MAIN_SOURCE_SET_NAME, project);
 	}
 
+	public static SourceSet getTestSourceSet(Project project) {
+		return getSourceSetByName(SourceSet.TEST_SOURCE_SET_NAME, project);
+	}
+
 	public static SourceSet createSourceSet(String name, Project project) {
 		return getSourceSets(project).create(name);
 	}
