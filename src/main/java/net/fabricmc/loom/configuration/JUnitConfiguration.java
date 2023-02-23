@@ -27,11 +27,8 @@ package net.fabricmc.loom.configuration;
 import java.io.File;
 
 import org.gradle.api.Project;
-import org.gradle.api.internal.tasks.testing.TestFramework;
-import org.gradle.api.internal.tasks.testing.junitplatform.JUnitPlatformTestFramework;
 import org.gradle.api.tasks.SourceSet;
 import org.gradle.api.tasks.TaskContainer;
-import org.gradle.api.tasks.testing.Test;
 import org.gradle.util.GradleVersion;
 
 import net.fabricmc.loom.LoomGradleExtension;
@@ -46,10 +43,7 @@ public class JUnitConfiguration {
 			return;
 		}
 
-		if (!isUsingJUnitPlatform(project)) {
-			// Only supported with junit platform
-			return;
-		}
+		// TODO check loader version?
 
 		final LoomGradleExtension extension = LoomGradleExtension.get(project);
 		final TaskContainer tasks = project.getTasks();
@@ -85,12 +79,6 @@ public class JUnitConfiguration {
 
 	private static boolean isGradle8OrHigher() {
 		return getMajorGradleVersion() >= 8;
-	}
-
-	private static boolean isUsingJUnitPlatform(Project project) {
-		final Test testExt = project.getExtensions().getByType(Test.class);
-		final TestFramework testFramework = testExt.getTestFrameworkProperty().get();
-		return testFramework instanceof JUnitPlatformTestFramework;
 	}
 
 	private static int getMajorGradleVersion() {
