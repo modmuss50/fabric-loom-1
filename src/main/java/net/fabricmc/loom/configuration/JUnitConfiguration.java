@@ -25,16 +25,23 @@
 package net.fabricmc.loom.configuration;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.stream.Collectors;
 
 import org.gradle.api.Project;
-import org.gradle.api.tasks.SourceSet;
+import org.gradle.api.file.DirectoryProperty;
+import org.gradle.api.provider.MapProperty;
+import org.gradle.api.tasks.Input;
+import org.gradle.api.tasks.OutputDirectory;
+import org.gradle.api.tasks.TaskAction;
 import org.gradle.api.tasks.TaskContainer;
 import org.gradle.util.GradleVersion;
 
 import net.fabricmc.loom.LoomGradleExtension;
-import net.fabricmc.loom.task.JUnitConfigJarTask;
+import net.fabricmc.loom.task.AbstractLoomTask;
 import net.fabricmc.loom.task.launch.GenerateDLIConfigTask;
-import net.fabricmc.loom.util.gradle.SourceSetHelper;
 
 public class JUnitConfiguration {
 	public static void setup(Project project) {
@@ -43,15 +50,10 @@ public class JUnitConfiguration {
 			return;
 		}
 
-		// TODO check loader version?
-
 		final LoomGradleExtension extension = LoomGradleExtension.get(project);
 		final TaskContainer tasks = project.getTasks();
-		final SourceSet testSourceSet = SourceSetHelper.getTestSourceSet(project);
 
-		final File configJar = new File(extension.getFiles().getProjectPersistentCache(), "fabric-loader-junit-config.jar");
-
-		var generateConfigTask = tasks.register("generateJUnitConfigJar", JUnitConfigJarTask.class, task -> {
+		var generateConfigTask = tasks.register("generateJUnitConfig", JUnitConfigTask.class, task -> {
 			var props = task.getProperties();
 
 			// TODO refactor this to not duplicate/call to GenerateDLIConfigTask
@@ -68,13 +70,14 @@ public class JUnitConfiguration {
 				props.put("fabric.classPathGroups", GenerateDLIConfigTask.getClassPathGroups(extension, project));
 			}
 
-			task.getOutput().set(configJar);
+			task.getOutput().set(new File(extension.getFiles().getProjectPersistentCache(), "junit-test-resources"));
 		});
 
 		tasks.named("configureLaunch", configureLaunch -> configureLaunch.dependsOn(generateConfigTask));
+		tasks.named("ideaSyncTask", configureLaunch -> configureLaunch.dependsOn(generateConfigTask));
 		tasks.named("test", test -> test.dependsOn(generateConfigTask));
 
-		project.getDependencies().add(testSourceSet.getRuntimeOnlyConfigurationName(), generateConfigTask.map(JUnitConfigJarTask::getOutput));
+		project.getDependencies().add("testRuntimeOnly", project.files(generateConfigTask.map(JUnitConfigTask::getOutput)));
 	}
 
 	private static boolean isGradle8OrHigher() {
@@ -84,5 +87,26 @@ public class JUnitConfiguration {
 	private static int getMajorGradleVersion() {
 		String version = GradleVersion.current().getVersion();
 		return Integer.parseInt(version.substring(0, version.indexOf(".")));
+	}
+
+	public abstract static class JUnitConfigTask extends AbstractLoomTask {
+		private static final String PROPERTY_FILE_NAME = "fabric-loader-junit.properties";
+
+		@Input
+		public abstract MapProperty<String, String> getProperties();
+
+		@OutputDirectory
+		public abstract DirectoryProperty getOutput();
+
+		@TaskAction
+		public void run() throws IOException {
+			final String content = getProperties().get().entrySet().stream()
+					.map(e -> "%s=%s".formatted(e.getKey(), e.getValue()))
+					.collect(Collectors.joining("\n"));
+			final Path outputDir = getOutput().get().getAsFile().toPath();
+
+			Files.createDirectories(outputDir);
+			Files.writeString(outputDir.resolve(PROPERTY_FILE_NAME), content);
+		}
 	}
 }
