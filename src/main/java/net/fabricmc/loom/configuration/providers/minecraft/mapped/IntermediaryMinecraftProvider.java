@@ -25,18 +25,21 @@
 package net.fabricmc.loom.configuration.providers.minecraft.mapped;
 
 import java.util.List;
+import java.util.stream.Stream;
 
 import org.gradle.api.Project;
 
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
+import net.fabricmc.loom.configuration.providers.minecraft.LegacyMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MergedMinecraftProvider;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJar;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.SingleJarEnvType;
 import net.fabricmc.loom.configuration.providers.minecraft.SingleJarMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.SplitMinecraftProvider;
 import net.fabricmc.tinyremapper.TinyRemapper;
 
-public abstract sealed class IntermediaryMinecraftProvider<M extends MinecraftProvider> extends AbstractMappedMinecraftProvider<M> permits IntermediaryMinecraftProvider.MergedImpl, IntermediaryMinecraftProvider.SingleJarImpl, IntermediaryMinecraftProvider.SplitImpl {
+public abstract sealed class IntermediaryMinecraftProvider<M extends MinecraftProvider> extends AbstractMappedMinecraftProvider<M> permits IntermediaryMinecraftProvider.MergedImpl, IntermediaryMinecraftProvider.SingleJarImpl, IntermediaryMinecraftProvider.SplitImpl, IntermediaryMinecraftProvider.LegacyImpl {
 	public IntermediaryMinecraftProvider(Project project, M minecraftProvider) {
 		super(project, minecraftProvider);
 	}
@@ -85,30 +88,69 @@ public abstract sealed class IntermediaryMinecraftProvider<M extends MinecraftPr
 
 	public static final class SingleJarImpl extends IntermediaryMinecraftProvider<SingleJarMinecraftProvider> implements SingleJar {
 		private final SingleJarEnvType env;
+		private final MappingsNamespace sourceNs;
 
-		private SingleJarImpl(Project project, SingleJarMinecraftProvider minecraftProvider, SingleJarEnvType env) {
+		private SingleJarImpl(Project project, SingleJarMinecraftProvider minecraftProvider, SingleJarEnvType env, MappingsNamespace sourceNs) {
 			super(project, minecraftProvider);
 			this.env = env;
+			this.sourceNs = sourceNs;
 		}
 
 		public static SingleJarImpl server(Project project, SingleJarMinecraftProvider minecraftProvider) {
-			return new SingleJarImpl(project, minecraftProvider, SingleJarEnvType.SERVER);
+			return new SingleJarImpl(project, minecraftProvider, SingleJarEnvType.SERVER, MappingsNamespace.OFFICIAL);
 		}
 
 		public static SingleJarImpl client(Project project, SingleJarMinecraftProvider minecraftProvider) {
-			return new SingleJarImpl(project, minecraftProvider, SingleJarEnvType.CLIENT);
+			return new SingleJarImpl(project, minecraftProvider, SingleJarEnvType.CLIENT, MappingsNamespace.OFFICIAL);
 		}
 
 		@Override
 		public List<RemappedJars> getRemappedJars() {
 			return List.of(
-				new RemappedJars(minecraftProvider.getMinecraftEnvOnlyJar(), getEnvOnlyJar(), MappingsNamespace.OFFICIAL)
+				new RemappedJars(minecraftProvider.getMinecraftEnvOnlyJar(), getEnvOnlyJar(), sourceNs)
 			);
 		}
 
 		@Override
 		public SingleJarEnvType env() {
 			return env;
+		}
+	}
+
+	public static final class LegacyImpl extends IntermediaryMinecraftProvider<LegacyMinecraftProvider> {
+		private final SingleJarImpl server;
+		private final SingleJarImpl client;
+
+		public LegacyImpl(Project project, LegacyMinecraftProvider minecraftProvider) {
+			super(project, minecraftProvider);
+
+			// TODO: change namespaces as required
+			server = new SingleJarImpl(project, minecraftProvider.getServerMinecraftProvider(), SingleJarEnvType.SERVER, MappingsNamespace.OFFICIAL);
+			client = new SingleJarImpl(project, minecraftProvider.getClientMinecraftProvider(), SingleJarEnvType.CLIENT, MappingsNamespace.OFFICIAL);
+		}
+
+		@Override
+		public List<MinecraftJar> provide(ProvideContext context) throws Exception {
+			return Stream.concat(
+					server.provide(context).stream(),
+					client.provide(context).stream()
+			).toList();
+		}
+
+		@Override
+		public List<RemappedJars> getRemappedJars() {
+			return Stream.concat(
+					server.getRemappedJars().stream(),
+					client.getRemappedJars().stream()
+			).toList();
+		}
+
+		@Override
+		public List<MinecraftJar> getMinecraftJars() {
+			return Stream.concat(
+					server.getMinecraftJars().stream(),
+					client.getMinecraftJars().stream()
+			).toList();
 		}
 	}
 }

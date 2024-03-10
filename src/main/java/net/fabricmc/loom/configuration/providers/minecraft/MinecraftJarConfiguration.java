@@ -93,6 +93,17 @@ public record MinecraftJarConfiguration<
 				SplitDecompileConfiguration::new,
 				List.of("client", "server")
 			);
+	public static final MinecraftJarConfiguration<
+			LegacyMinecraftProvider,
+			NamedMinecraftProvider.LegacyMergedImpl,
+			MappedMinecraftProvider> LEGACY_MERGED = new MinecraftJarConfiguration<>(
+			LegacyMinecraftProvider::new,
+			IntermediaryMinecraftProvider.LegacyImpl::new,
+			NamedMinecraftProvider.LegacyMergedImpl::new,
+			ProcessedNamedMinecraftProvider.LegacyMergedImpl::new,
+			SingleJarDecompileConfiguration::new,
+			List.of("client", "server")
+	);
 
 	public MinecraftProvider createMinecraftProvider(ConfigContext context) {
 		return minecraftProviderFunction.create(context);
