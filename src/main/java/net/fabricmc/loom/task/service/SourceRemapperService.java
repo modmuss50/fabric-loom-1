@@ -51,16 +51,14 @@ import net.fabricmc.loom.util.service.SharedServiceManager;
 import net.fabricmc.lorenztiny.TinyMappingsReader;
 
 public final class SourceRemapperService implements SharedService {
-	public static synchronized SourceRemapperService create(SharedServiceManager serviceManager, RemapSourcesJarTask task) {
-		final Project project = task.getProject();
-		final String to = task.getTargetNamespace().get();
-		final String from = task.getSourceNamespace().get();
-		final LoomGradleExtension extension = LoomGradleExtension.get(project);
+	public static synchronized SourceRemapperService create(SharedServiceManager serviceManager, RemapSourcesJarTask.RemapSourcesParams params) {
+		final String to = params.getTargetNamespace().get();
+		final String from = params.getSourceNamespace().get();
 		final String id = extension.getMappingConfiguration().getBuildServiceName("sourceremapper", from, to);
 		final int javaCompileRelease = SourceRemapper.getJavaCompileRelease(project);
 
 		return serviceManager.getOrCreateService(id, () ->
-				new SourceRemapperService(MappingsService.createDefault(project, serviceManager, from, to), task.getClasspath(), javaCompileRelease));
+				new SourceRemapperService(MappingsService.createDefault(project, serviceManager, from, to), params.getClasspath(), javaCompileRelease));
 	}
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(SourceRemapperService.class);

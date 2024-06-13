@@ -75,7 +75,6 @@ public abstract class LoomGradleExtensionImpl extends LoomGradleExtensionApiImpl
 	private IntermediaryMinecraftProvider<?> intermediaryMinecraftProvider;
 	private InstallerData installerData;
 	private boolean refreshDeps;
-	private final Provider<Boolean> multiProjectOptimisation;
 	private final ListProperty<LibraryProcessorManager.LibraryProcessorFactory> libraryProcessorFactories;
 	private final LoomProblemReporter problemReporter;
 	private final boolean configurationCacheActive;
@@ -103,22 +102,12 @@ public abstract class LoomGradleExtensionImpl extends LoomGradleExtensionApiImpl
 		});
 
 		refreshDeps = manualRefreshDeps();
-		multiProjectOptimisation = GradleUtils.getBooleanPropertyProvider(project, Constants.Properties.MULTI_PROJECT_OPTIMISATION);
 		libraryProcessorFactories = project.getObjects().listProperty(LibraryProcessorManager.LibraryProcessorFactory.class);
 		libraryProcessorFactories.addAll(LibraryProcessorManager.DEFAULT_LIBRARY_PROCESSORS);
 		libraryProcessorFactories.finalizeValueOnRead();
 
 		configurationCacheActive = getBuildFeatures().getConfigurationCache().getActive().get();
 		isolatedProjectsActive = getBuildFeatures().getIsolatedProjects().getActive().get();
-
-		// Fundamentally impossible to support multi-project optimisation with the configuration cache and/or isolated projects.
-		if (multiProjectOptimisation.get() && configurationCacheActive) {
-			throw new UnsupportedOperationException("Multi-project optimisation is not supported with the configuration cache");
-		}
-
-		if (multiProjectOptimisation.get() && isolatedProjectsActive) {
-			throw new UnsupportedOperationException("Isolated projects are not supported with multi-project optimisation");
-		}
 
 		if (configurationCacheActive) {
 			project.getLogger().warn("Loom support for the Gradle configuration cache is highly experimental and may not work as expected. Please report any issues you encounter.");
@@ -272,11 +261,6 @@ public abstract class LoomGradleExtensionImpl extends LoomGradleExtensionApiImpl
 	@Override
 	public void setRefreshDeps(boolean refreshDeps) {
 		this.refreshDeps = refreshDeps;
-	}
-
-	@Override
-	public boolean multiProjectOptimisation() {
-		return multiProjectOptimisation.getOrElse(false);
 	}
 
 	@Override

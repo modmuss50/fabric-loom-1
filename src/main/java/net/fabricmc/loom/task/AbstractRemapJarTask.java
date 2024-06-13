@@ -54,7 +54,6 @@ import org.gradle.api.tasks.Internal;
 import org.gradle.api.tasks.Optional;
 import org.gradle.api.tasks.SourceSet;
 import org.gradle.api.tasks.bundling.ZipEntryCompression;
-import org.gradle.build.event.BuildEventsListenerRegistry;
 import org.gradle.jvm.tasks.Jar;
 import org.gradle.workers.WorkAction;
 import org.gradle.workers.WorkParameters;
@@ -83,17 +82,8 @@ public abstract class AbstractRemapJarTask extends Jar {
 	@Input
 	public abstract Property<String> getTargetNamespace();
 
-	/**
-	 * When enabled the TinyRemapperService will not be shared across sub projects.
-	 */
-	@Input
-	public abstract Property<Boolean> getRemapperIsolation();
-
 	@Inject
 	protected abstract WorkerExecutor getWorkerExecutor();
-
-	@Inject
-	protected abstract BuildEventsListenerRegistry getBuildEventsListenerRegistry();
 
 	@Input
 	public abstract Property<Boolean> getIncludesClientOnlyClasses();
@@ -116,7 +106,6 @@ public abstract class AbstractRemapJarTask extends Jar {
 	public AbstractRemapJarTask() {
 		getSourceNamespace().convention(MappingsNamespace.NAMED.toString()).finalizeValueOnRead();
 		getTargetNamespace().convention(MappingsNamespace.INTERMEDIARY.toString()).finalizeValueOnRead();
-		getRemapperIsolation().convention(false).finalizeValueOnRead();
 		getIncludesClientOnlyClasses().convention(false).finalizeValueOnRead();
 		getJarType().finalizeValueOnRead();
 
@@ -139,6 +128,7 @@ public abstract class AbstractRemapJarTask extends Jar {
 
 			params.getJarManifestService().set(jarManifestServiceProvider);
 			params.getEntryCompression().set(getEntryCompression());
+			params.getClasspath().setFrom(getClasspath());
 
 			if (getIncludesClientOnlyClasses().get()) {
 				final List<String> clientOnlyEntries = new ArrayList<>(getClientOnlyEntries(getClientSourceSet()));
@@ -185,6 +175,8 @@ public abstract class AbstractRemapJarTask extends Jar {
 		MapProperty<String, String> getManifestAttributes();
 
 		ListProperty<String> getClientOnlyEntries();
+
+		ConfigurableFileCollection getClasspath();
 	}
 
 	protected void applyClientOnlyManifestAttributes(AbstractRemapParams params, List<String> entries) {

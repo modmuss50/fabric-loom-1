@@ -39,7 +39,7 @@ import org.slf4j.LoggerFactory;
  * This is a basic replacement for gradle's build service api.
  */
 public abstract class SharedServiceManager {
-	private static final Logger LOGGER = LoggerFactory.getLogger(BuildSharedServiceManager.class);
+	private static final Logger LOGGER = LoggerFactory.getLogger(SharedServiceManager.class);
 	private final Map<String, SharedService> sharedServiceMap = new HashMap<>();
 
 	private boolean shutdown = false;

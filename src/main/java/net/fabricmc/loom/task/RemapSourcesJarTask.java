@@ -32,26 +32,18 @@ import java.util.List;
 import javax.inject.Inject;
 
 import org.gradle.api.plugins.JavaPlugin;
-import org.gradle.api.provider.Property;
-import org.gradle.api.provider.Provider;
 import org.gradle.api.tasks.SourceSet;
 import org.gradle.api.tasks.TaskAction;
-import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import net.fabricmc.loom.task.service.SourceRemapperService;
-import net.fabricmc.loom.util.service.BuildSharedServiceManager;
-import net.fabricmc.loom.util.service.UnsafeWorkQueueHelper;
+import net.fabricmc.loom.util.service.ScopedSharedServiceManager;
 
 public abstract class RemapSourcesJarTask extends AbstractRemapJarTask {
-	private final Provider<BuildSharedServiceManager> serviceManagerProvider;
-
 	@Inject
 	public RemapSourcesJarTask() {
 		super();
-		serviceManagerProvider = BuildSharedServiceManager.createForTask(this, getBuildEventsListenerRegistry());
-
 		getClasspath().from(getProject().getConfigurations().getByName(JavaPlugin.COMPILE_CLASSPATH_CONFIGURATION_NAME));
 		getJarType().set("sources");
 	}
@@ -59,9 +51,6 @@ public abstract class RemapSourcesJarTask extends AbstractRemapJarTask {
 	@TaskAction
 	public void run() {
 		submitWork(RemapSourcesAction.class, params -> {
-			if (!params.namespacesMatch()) {
-				params.getSourcesRemapperServiceUuid().set(UnsafeWorkQueueHelper.create(SourceRemapperService.create(serviceManagerProvider.get().get(), this)));
-			}
 		});
 	}
 
@@ -73,26 +62,16 @@ public abstract class RemapSourcesJarTask extends AbstractRemapJarTask {
 	}
 
 	public interface RemapSourcesParams extends AbstractRemapParams {
-		Property<String> getSourcesRemapperServiceUuid();
 	}
 
 	public abstract static class RemapSourcesAction extends AbstractRemapAction<RemapSourcesParams> {
 		private static final Logger LOGGER = LoggerFactory.getLogger(RemapSourcesAction.class);
 
-		private final @Nullable SourceRemapperService sourceRemapperService;
-
-		public RemapSourcesAction() {
-			super();
-
-			sourceRemapperService = getParameters().getSourcesRemapperServiceUuid().isPresent()
-					? UnsafeWorkQueueHelper.get(getParameters().getSourcesRemapperServiceUuid(), SourceRemapperService.class)
-					: null;
-		}
-
 		@Override
 		public void execute() {
-			try {
-				if (sourceRemapperService != null) {
+			try (ScopedSharedServiceManager serviceManager = new ScopedSharedServiceManager()) {
+				if (!getParameters().namespacesMatch()) {
+					final SourceRemapperService sourceRemapperService = SourceRemapperService.create(serviceManager, getParameters());
 					sourceRemapperService.remapSourcesJar(inputFile, outputFile);
 				} else {
 					Files.copy(inputFile, outputFile, StandardCopyOption.REPLACE_EXISTING);
