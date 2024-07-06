@@ -65,6 +65,7 @@ import net.fabricmc.loom.build.nesting.NestableJarGenerationTask;
 import net.fabricmc.loom.configuration.accesswidener.AccessWidenerFile;
 import net.fabricmc.loom.configuration.mods.ArtifactMetadata;
 import net.fabricmc.loom.extension.MixinExtension;
+import net.fabricmc.loom.task.service.MappingsService;
 import net.fabricmc.loom.task.service.TinyRemapperService;
 import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.ExceptionUtil;
@@ -98,11 +99,18 @@ public abstract class RemapJarTask extends AbstractRemapJarTask {
 	@ApiStatus.Internal
 	public abstract Property<Boolean> getUseMixinAP();
 
+	@Input
+	@ApiStatus.Internal
+	protected abstract ListProperty<MappingsService.Mappings> getMappings();
+
 	@Inject
 	public RemapJarTask() {
 		super();
 		final ConfigurationContainer configurations = getProject().getConfigurations();
-		getClasspath().from(configurations.getByName(JavaPlugin.COMPILE_CLASSPATH_CONFIGURATION_NAME));
+		getClasspath()
+				.from(configurations.getByName(JavaPlugin.COMPILE_CLASSPATH_CONFIGURATION_NAME))
+				.minus(configurations.getByName(Constants.Configurations.MINECRAFT_COMPILE_LIBRARIES))
+				.minus(configurations.getByName(Constants.Configurations.MINECRAFT_RUNTIME_LIBRARIES));
 		getAddNestedDependencies().convention(true).finalizeValueOnRead();
 		getOptimizeFabricModJson().convention(false).finalizeValueOnRead();
 
@@ -111,6 +119,10 @@ public abstract class RemapJarTask extends AbstractRemapJarTask {
 		getNestedJars().builtBy(processIncludeJars);
 
 		getUseMixinAP().set(LoomGradleExtension.get(getProject()).getMixin().getUseLegacyMixinAp());
+
+		getMappings().add(getProject().provider(() -> MappingsService.Mappings.getDefaultMappings(getProject(), getSourceNamespace().get(), getTargetNamespace().get())));
+		getMappings().addAll(getProject().provider(() -> MappingsService.Mappings.getMixinMappings(getProject(), getSourceNamespace().get(), getTargetNamespace().get())));
+		getMappings().finalizeValueOnRead();
 
 		// Make outputs reproducible by default
 		setReproducibleFileOrder(true);
@@ -144,6 +156,7 @@ public abstract class RemapJarTask extends AbstractRemapJarTask {
 			}
 
 			params.getOptimizeFmj().set(getOptimizeFabricModJson().get());
+			params.getMappings().set(getMappings());
 		});
 	}
 
@@ -188,6 +201,7 @@ public abstract class RemapJarTask extends AbstractRemapJarTask {
 
 		record RefmapData(List<String> mixinConfigs, String refmapName) implements Serializable { }
 		ListProperty<RefmapData> getMixinData();
+		ListProperty<MappingsService.Mappings> getMappings();
 	}
 
 	public abstract static class RemapAction extends AbstractRemapAction<RemapParams> {

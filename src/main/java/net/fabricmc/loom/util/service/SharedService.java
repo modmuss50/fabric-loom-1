@@ -27,6 +27,7 @@ package net.fabricmc.loom.util.service;
 import java.io.Closeable;
 import java.io.IOException;
 
+@Deprecated(forRemoval = true)
 public interface SharedService extends Closeable {
 	@Override
 	default void close() throws IOException {

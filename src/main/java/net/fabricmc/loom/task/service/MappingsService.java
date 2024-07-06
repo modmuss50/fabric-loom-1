@@ -24,40 +24,80 @@
 
 package net.fabricmc.loom.task.service;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.gradle.api.Project;
+import org.gradle.api.file.RegularFileProperty;
+import org.gradle.api.provider.Property;
+import org.gradle.api.tasks.SourceSet;
 
 import net.fabricmc.loom.LoomGradleExtension;
+import net.fabricmc.loom.build.mixin.AnnotationProcessorInvoker;
 import net.fabricmc.loom.configuration.providers.mappings.MappingConfiguration;
 import net.fabricmc.loom.util.TinyRemapperHelper;
-import net.fabricmc.loom.util.service.SharedService;
-import net.fabricmc.loom.util.service.SharedServiceManager;
+import net.fabricmc.loom.util.gradle.GradleUtils;
+import net.fabricmc.loom.util.gradle.SourceSetHelper;
 import net.fabricmc.mappingio.MappingReader;
 import net.fabricmc.mappingio.tree.MemoryMappingTree;
 import net.fabricmc.tinyremapper.IMappingProvider;
 
-public final class MappingsService implements SharedService {
-	private record Options(Path mappingsFile, String from, String to, boolean remapLocals) { }
+public final class MappingsService implements AutoCloseable {
+	public interface Mappings {
+		RegularFileProperty mappingsFile();
+		Property<String> getFrom();
+		Property<String> getTo();
+		Property<Boolean> getRemapLocals();
 
-	public static synchronized MappingsService create(SharedServiceManager sharedServiceManager, String name, Path mappingsFile, String from, String to, boolean remapLocals) {
-		final Options options = new Options(mappingsFile, from, to, remapLocals);
-		final String id = name + options.hashCode();
-		return sharedServiceManager.getOrCreateService(id, () -> new MappingsService(options));
+		private static Mappings createMappings(Project project, String from, String to, Path mappingsFile) {
+			Mappings mappings = project.getObjects().newInstance(Mappings.class);
+			mappings.mappingsFile().set(mappingsFile.toFile());
+			mappings.getFrom().set(from);
+			mappings.getTo().set(to);
+			mappings.getRemapLocals().set(false);
+			return mappings;
+		}
+
+		static Mappings getDefaultMappings(Project project, String from, String to) {
+			final MappingConfiguration mappingConfiguration = LoomGradleExtension.get(project).getMappingConfiguration();
+			return createMappings(project, from, to, mappingConfiguration.tinyMappings);
+		}
+
+		// Returns a list of mixin mappings from other projects that are using the same mapping id.
+		static List<Mappings> getMixinMappings(Project project, String from, String to) {
+			LoomGradleExtension extension = LoomGradleExtension.get(project);
+			String mappingId = extension.getMappingConfiguration().mappingsIdentifier;
+
+			List<Mappings> params = new ArrayList<>();
+
+			GradleUtils.allLoomProjects(project.getGradle(), otherProject -> {
+				if (!mappingId.equals(LoomGradleExtension.get(otherProject).getMappingConfiguration().mappingsIdentifier)) {
+					// Only find mixin mappings that are from other projects with the same mapping id.
+					return;
+				}
+
+				for (SourceSet sourceSet : SourceSetHelper.getSourceSets(otherProject)) {
+					final File mixinMappings = AnnotationProcessorInvoker.getMixinMappingsForSourceSet(otherProject, sourceSet);
+
+					if (!mixinMappings.exists()) {
+						continue;
+					}
+
+					params.add(Mappings.createMappings(otherProject, from, to, mixinMappings.toPath()));
+				}
+			});
+
+			return params;
+		}
 	}
 
-	public static MappingsService createDefault(Project project, SharedServiceManager serviceManager, String from, String to) {
-		final MappingConfiguration mappingConfiguration = LoomGradleExtension.get(project).getMappingConfiguration();
+	private final Mappings options;
 
-		final String name = mappingConfiguration.getBuildServiceName("mappingsProvider", from, to);
-		return MappingsService.create(serviceManager, name, mappingConfiguration.tinyMappings, from, to, false);
-	}
-
-	private final Options options;
-
-	public MappingsService(Options options) {
+	public MappingsService(Mappings options) {
 		this.options = options;
 	}
 
@@ -68,10 +108,10 @@ public final class MappingsService implements SharedService {
 		if (mappingProvider == null) {
 			try {
 				mappingProvider = TinyRemapperHelper.create(
-						options.mappingsFile(),
-						options.from(),
-						options.to(),
-						options.remapLocals()
+						options.mappingsFile().getAsFile().get().toPath(),
+						options.getFrom().get(),
+						options.getTo().get(),
+						options.getRemapLocals().get()
 				);
 			} catch (IOException e) {
 				throw new UncheckedIOException("Failed to read mappings from: " + options.mappingsFile(), e);
@@ -86,7 +126,7 @@ public final class MappingsService implements SharedService {
 			memoryMappingTree = new MemoryMappingTree();
 
 			try {
-				MappingReader.read(options.mappingsFile(), memoryMappingTree);
+				MappingReader.read(options.mappingsFile().get().getAsFile().toPath(), memoryMappingTree);
 			} catch (IOException e) {
 				throw new UncheckedIOException("Failed to read mappings from: " + options.mappingsFile(), e);
 			}
@@ -96,15 +136,16 @@ public final class MappingsService implements SharedService {
 	}
 
 	public String getFromNamespace() {
-		return options.from();
+		return options.getFrom().get();
 	}
 
 	public String getToNamespace() {
-		return options.to();
+		return options.getTo().get();
 	}
 
 	@Override
 	public void close() {
 		mappingProvider = null;
+		memoryMappingTree = null;
 	}
 }

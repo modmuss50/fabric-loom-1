@@ -35,101 +35,41 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.StringJoiner;
 
-import net.fabricmc.loom.task.RemapJarTask;
-
-import org.gradle.api.artifacts.ConfigurationContainer;
-import org.gradle.api.invocation.Gradle;
 import org.gradle.api.model.ObjectFactory;
-import org.gradle.api.tasks.SourceSet;
 import org.jetbrains.annotations.Nullable;
 
-import net.fabricmc.loom.LoomGradleExtension;
-import net.fabricmc.loom.build.mixin.AnnotationProcessorInvoker;
 import net.fabricmc.loom.extension.RemapperExtensionHolder;
-import net.fabricmc.loom.task.AbstractRemapJarTask;
-import net.fabricmc.loom.util.Constants;
-import net.fabricmc.loom.util.gradle.GradleUtils;
-import net.fabricmc.loom.util.gradle.SourceSetHelper;
+import net.fabricmc.loom.task.RemapJarTask;
 import net.fabricmc.loom.util.kotlin.KotlinClasspath;
 import net.fabricmc.loom.util.kotlin.KotlinClasspathService;
 import net.fabricmc.loom.util.kotlin.KotlinRemapperClassloader;
-import net.fabricmc.loom.util.service.SharedService;
 import net.fabricmc.loom.util.service.SharedServiceManager;
 import net.fabricmc.tinyremapper.IMappingProvider;
 import net.fabricmc.tinyremapper.InputTag;
 import net.fabricmc.tinyremapper.TinyRemapper;
 
-public class TinyRemapperService implements SharedService {
-	public static synchronized TinyRemapperService getOrCreate(SharedServiceManager serviceManager, RemapJarTask.RemapParams params) {
+public class TinyRemapperService implements AutoCloseable {
+	public static TinyRemapperService getOrCreate(SharedServiceManager serviceManager, RemapJarTask.RemapParams params) {
 		final String to = params.getTargetNamespace().get();
 		final String from = params.getSourceNamespace().get();
 		final boolean legacyMixin = !params.getUseMixinExtension().get();
 		final @Nullable KotlinClasspathService kotlinClasspathService = KotlinClasspathService.getOrCreateIfRequired(serviceManager, project);
 
-		// Generates an id that is used to share the remapper across projects. This tasks in the remap jar task name to handle custom remap jar tasks separately.
-		final var joiner = new StringJoiner(":");
-		joiner.add(extension.getMappingConfiguration().getBuildServiceName("remapJarService", from, to));
-		joiner.add(remapJarTask.getName());
+		List<MappingsService.Mappings> mappings = params.getMappings().get();
 
-		if (kotlinClasspathService != null) {
-			joiner.add("kotlin-" + kotlinClasspathService.version());
-		}
+		TinyRemapperService service = new TinyRemapperService(mappings, !legacyMixin, kotlinClasspathService, extension.getKnownIndyBsms().get(), extension.getRemapperExtensions().get(), from, to, project.getObjects());
 
-		joiner.add(project.getPath());
-
-		extension.getKnownIndyBsms().get().stream().sorted().forEach(joiner::add);
-
-		final String id = joiner.toString();
-
-		TinyRemapperService service = serviceManager.getOrCreateService(id, () -> {
-			List<IMappingProvider> mappings = new ArrayList<>();
-			mappings.add(MappingsService.createDefault(project, serviceManager, from, to).getMappingsProvider());
-
-			if (legacyMixin) {
-				mappings.add(gradleMixinMappingProvider(serviceManager, project.getGradle(), extension.getMappingConfiguration().mappingsIdentifier, from, to));
-			}
-
-			return new TinyRemapperService(mappings, !legacyMixin, kotlinClasspathService, extension.getKnownIndyBsms().get(), extension.getRemapperExtensions().get(), from, to, project.getObjects());
-		});
-
-		final ConfigurationContainer configurations = project.getConfigurations();
-
-		List<Path> classPath = remapJarTask.getClasspath()
-				.minus(configurations.getByName(Constants.Configurations.MINECRAFT_COMPILE_LIBRARIES))
-				.minus(configurations.getByName(Constants.Configurations.MINECRAFT_RUNTIME_LIBRARIES))
+		List<Path> classPath = params.getClasspath()
 				.getFiles()
 				.stream()
 				.map(File::toPath)
 				.filter(Files::exists)
 				.toList();
 
+		// TODO pass in via constructor
 		service.readClasspath(classPath);
 		return service;
-	}
-
-	// Add all of the mixin mappings from all loom projects.
-	private static IMappingProvider gradleMixinMappingProvider(SharedServiceManager serviceManager, Gradle gradle, String mappingId, String from, String to) {
-		return out -> GradleUtils.allLoomProjects(gradle, project -> {
-			final LoomGradleExtension extension = LoomGradleExtension.get(project);
-
-			if (!mappingId.equals(extension.getMappingConfiguration().mappingsIdentifier)) {
-				// Only find mixin mappings that are from other projects with the same mapping id.
-				return;
-			}
-
-			for (SourceSet sourceSet : SourceSetHelper.getSourceSets(project)) {
-				final File mixinMappings = AnnotationProcessorInvoker.getMixinMappingsForSourceSet(project, sourceSet);
-
-				if (!mixinMappings.exists()) {
-					continue;
-				}
-
-				MappingsService service = MappingsService.create(serviceManager, mixinMappings.getAbsolutePath(), mixinMappings.toPath(), from, to, false);
-				service.getMappingsProvider().load(out);
-			}
-		});
 	}
 
 	private TinyRemapper tinyRemapper;
