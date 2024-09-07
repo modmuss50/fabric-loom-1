@@ -81,7 +81,8 @@ public record ArtifactMetadata(boolean isFabricMod, RemapRequirements remapRequi
 					}
 				}
 
-				if (loomVersion != null && refmapRemapType != MixinRemapType.STATIC) {
+				// Validate the loom version if the jar uses tiny-remapper remapped mixins
+				if (loomVersion != null && refmapRemapType != MixinRemapType.MIXIN) {
 					validateLoomVersion(loomVersion, currentLoomVersion);
 				}
 
