@@ -38,17 +38,15 @@ class SandboxMetadataTest extends Specification {
 		given:
 		def sandboxJar = createSandboxJar("""
 			{
-				"version": 1,
-				"mainClass": "net.fabricmc.loom.test.Main",
-				"platforms": {
-					"windows": [
-						"arm64",
-						"x86_64"
-					],
-					"macos": [
-						"arm64"
-					]
+			  "version": 2,
+			  "platforms": {
+				"windows/x86_64": {
+				  "entrypoint": "fabric-sandbox/x86_64/FabricSandbox.exe"
+				},
+				"windows/arm64": {
+				  "entrypoint": "fabric-sandbox/arm64/FabricSandbox.exe"
 				}
+			  }
 			}
 			""")
 
@@ -56,8 +54,6 @@ class SandboxMetadataTest extends Specification {
 		def metadata = SandboxMetadata.readFromJar(sandboxJar)
 
 		then:
-		metadata.mainClass() == "net.fabricmc.loom.test.Main"
-
 		metadata.supportsPlatform(PlatformTestUtils.WINDOWS_X64)
 		metadata.supportsPlatform(PlatformTestUtils.WINDOWS_ARM64)
 
@@ -65,7 +61,9 @@ class SandboxMetadataTest extends Specification {
 		!metadata.supportsPlatform(PlatformTestUtils.LINUX_ARM64)
 
 		!metadata.supportsPlatform(PlatformTestUtils.MAC_OS_X64)
-		metadata.supportsPlatform(PlatformTestUtils.MAC_OS_ARM64)
+		!metadata.supportsPlatform(PlatformTestUtils.MAC_OS_ARM64)
+
+		metadata.getConfiguration(PlatformTestUtils.WINDOWS_X64).entrypoint == "fabric-sandbox/x86_64/FabricSandbox.exe"
 	}
 
 	private static Path createSandboxJar(@Language("json") String json) {

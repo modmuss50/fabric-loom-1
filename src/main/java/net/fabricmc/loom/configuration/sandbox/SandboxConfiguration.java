@@ -24,8 +24,12 @@
 
 package net.fabricmc.loom.configuration.sandbox;
 
+import java.io.File;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 import javax.inject.Inject;
 
@@ -33,12 +37,14 @@ import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
 import org.gradle.api.artifacts.ExternalModuleDependency;
 import org.gradle.api.artifacts.dsl.DependencyFactory;
-import org.gradle.api.plugins.JavaPlugin;
+import org.gradle.api.file.FileCollection;
+import org.gradle.api.tasks.Exec;
+import org.gradle.api.tasks.Sync;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import net.fabricmc.loom.LoomGradleExtension;
-import net.fabricmc.loom.configuration.ide.RunConfigSettings;
+import net.fabricmc.loom.configuration.ide.RunConfig;
 import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.Platform;
 import net.fabricmc.loom.util.gradle.GradleUtils;
@@ -80,19 +86,39 @@ public abstract class SandboxConfiguration implements Runnable {
 			return;
 		}
 
-		getProject().getDependencies().add(JavaPlugin.RUNTIME_ONLY_CONFIGURATION_NAME, dependency);
+		final SandboxMetadata.Configuration sandboxConfig = metadata.getConfiguration(Platform.CURRENT);
+		final File sandboxDir = new File(extension.getFiles().getProjectPersistentCache(), "sandbox");
 
-		extension.getRuns().create("clientSandbox", settings -> {
-			RunConfigSettings clientRun = extension.getRuns().getByName("client");
+		getProject().getTasks().register("extractSandbox", Sync.class, task -> {
+			task.from(getProject().zipTree(sandboxJar));
+			task.into(sandboxDir);
+		});
 
-			settings.inherit(clientRun);
+		getProject().getTasks().register("clientSandbox", Exec.class, task -> {
+			task.dependsOn("extractSandbox");
+			task.setGroup("sandbox");
 
-			settings.name("Client Sandbox");
+			final RunConfig clientRun = RunConfig.runConfig(getProject(), extension.getRuns().getByName("client"));
+			FileCollection runtimeClasspath = clientRun.sourceSet.getRuntimeClasspath();
+			task.dependsOn(runtimeClasspath);
 
-			// The sandbox also acts as DLI
-			// Set the sandbox as the true main class
-			settings.devLaunchMainClass().set(metadata.mainClass());
-			settings.property("fabric.sandbox.realMain", clientRun.getMainClass().get());
+			final String classpathEntries = runtimeClasspath.getFiles().stream()
+					.map(File::getAbsolutePath)
+					.collect(Collectors.joining(File.pathSeparator));
+
+			List<String> commandLine = new ArrayList<>();
+			commandLine.add(new File(sandboxDir, sandboxConfig.entrypoint()).getAbsolutePath());
+			commandLine.addAll(clientRun.vmArgs);
+			commandLine.add("-Dfabric.log.level=debug");
+			commandLine.add("-Dfabric.sandbox.javaHome=" + System.getProperty("java.home"));
+			commandLine.add("-cp");
+			commandLine.add(classpathEntries);
+			commandLine.add(clientRun.mainClass);
+			commandLine.addAll(clientRun.programArgs);
+			task.commandLine(commandLine);
+
+			task.workingDir(clientRun.runDir);
+			task.environment(clientRun.environmentVariables);
 		});
 	}
 }

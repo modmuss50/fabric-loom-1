@@ -32,10 +32,8 @@ import static net.fabricmc.loom.util.fmj.FabricModJsonUtils.readString;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 import com.google.gson.JsonElement;
@@ -44,7 +42,7 @@ import com.google.gson.JsonObject;
 import net.fabricmc.loom.util.Platform;
 import net.fabricmc.loom.util.ZipUtils;
 
-public sealed interface SandboxMetadata permits SandboxMetadata.V1 {
+public sealed interface SandboxMetadata permits SandboxMetadata.V2 {
 	String SANDBOX_METADATA_FILENAME = "fabric-sandbox.json";
 
 	static SandboxMetadata readFromJar(Path path) {
@@ -52,7 +50,7 @@ public sealed interface SandboxMetadata permits SandboxMetadata.V1 {
 			JsonObject jsonObject = ZipUtils.unpackGson(path, SANDBOX_METADATA_FILENAME, JsonObject.class);
 			int version = readInt(jsonObject, "version");
 			return switch (version) {
-			case 1 -> SandboxMetadata.V1.parseV1(jsonObject);
+			case 2 -> SandboxMetadata.V2.parse(jsonObject);
 			default -> throw new UnsupportedOperationException("Unsupported sandbox metadata version: " + version);
 			};
 		} catch (IOException e) {
@@ -61,59 +59,61 @@ public sealed interface SandboxMetadata permits SandboxMetadata.V1 {
 	}
 
 	/**
-	 * @return The main class of the sandbox.
-	 */
-	String mainClass();
-
-	/**
 	 * @param platform The platform to check.
 	 * @return True if the sandbox supports the platform, false otherwise.
 	 */
 	boolean supportsPlatform(Platform platform);
 
-	record V1(String mainClass, Map<OperatingSystem, List<Architecture>> supportedPlatforms) implements SandboxMetadata {
-		static V1 parseV1(JsonObject jsonObject) {
-			String mainClass = readString(jsonObject, "mainClass");
-			JsonObject platforms = getJsonObject(jsonObject, "platforms");
+	/**
+	 * @param platform The platform to get the configuration for.
+	 * @return The configuration for the platform.
+	 */
+	Configuration getConfiguration(Platform platform);
 
-			Map<OperatingSystem, List<Architecture>> supportedPlatforms = new HashMap<>();
+	record V2(Map<OperatingSystemAndArchitecture, Configuration> platforms) implements SandboxMetadata {
+		static V2 parse(JsonObject jsonObject) {
+			Map<OperatingSystemAndArchitecture, Configuration> platforms = new HashMap<>();
 
-			for (Map.Entry<String, JsonElement> entry : platforms.entrySet()) {
-				if (!entry.getValue().isJsonArray()) {
-					throw new ParseException("Unexpected json array type for key (%s)", entry.getKey());
+			for (Map.Entry<String, JsonElement> entry : getJsonObject(jsonObject, "platforms").entrySet()) {
+				if (!entry.getValue().isJsonObject()) {
+					throw new ParseException("Unexpected json object type for key (%s)", entry.getKey());
 				}
 
-				List<Architecture> architectures = new ArrayList<>();
+				final OperatingSystemAndArchitecture osAndArch = OperatingSystemAndArchitecture.parse(entry.getKey());
+				final Configuration configuration = V2Configuration.parse(entry.getValue().getAsJsonObject());
 
-				for (JsonElement element : entry.getValue().getAsJsonArray()) {
-					if (!(element.isJsonPrimitive() && element.getAsJsonPrimitive().isString())) {
-						throw new ParseException("Unexpected json primitive type for key (%s)", entry.getKey());
-					}
-
-					architectures.add(parseArchitecture(element.getAsString()));
-				}
-
-				supportedPlatforms.put(parseOperatingSystem(entry.getKey()), Collections.unmodifiableList(architectures));
+				platforms.put(osAndArch, configuration);
 			}
 
-			return new V1(mainClass, Collections.unmodifiableMap(supportedPlatforms));
+			return new V2(Collections.unmodifiableMap(platforms));
 		}
 
 		@Override
 		public boolean supportsPlatform(Platform platform) {
-			for (Map.Entry<OperatingSystem, List<Architecture>> entry : supportedPlatforms.entrySet()) {
-				if (!entry.getKey().compatibleWith(platform)) {
-					continue;
-				}
-
-				for (Architecture architecture : entry.getValue()) {
-					if (architecture.compatibleWith(platform)) {
-						return true;
-					}
+			for (OperatingSystemAndArchitecture entry : platforms.keySet()) {
+				if (entry.compatibleWith(platform)) {
+					return true;
 				}
 			}
 
 			return false;
+		}
+
+		@Override
+		public Configuration getConfiguration(Platform platform) {
+			for (OperatingSystemAndArchitecture entry : platforms.keySet()) {
+				if (entry.compatibleWith(platform)) {
+					return platforms.get(entry);
+				}
+			}
+
+			throw new ParseException("No compatible configuration found for platform: %s", platform);
+		}
+
+		record V2Configuration(String entrypoint) implements Configuration {
+			private static Configuration parse(JsonObject jsonObject) {
+				return new V2Configuration(readString(jsonObject, "entrypoint"));
+			}
 		}
 	}
 
@@ -129,6 +129,15 @@ public sealed interface SandboxMetadata permits SandboxMetadata.V1 {
 			case WINDOWS -> operatingSystem.isWindows();
 			case MAC_OS -> operatingSystem.isMacOS();
 			case LINUX -> operatingSystem.isLinux();
+			};
+		}
+
+		private static OperatingSystem parse(String os) {
+			return switch (os) {
+			case "windows" -> OperatingSystem.WINDOWS;
+			case "macos" -> OperatingSystem.MAC_OS;
+			case "linux" -> OperatingSystem.LINUX;
+			default -> throw new ParseException("Unsupported sandbox operating system: %s", os);
 			};
 		}
 	}
@@ -149,22 +158,36 @@ public sealed interface SandboxMetadata permits SandboxMetadata.V1 {
 			case ARM64 -> architecture.isArm();
 			};
 		}
+
+		private static Architecture parse(String arch) {
+			return switch (arch) {
+			case "x86_64" -> Architecture.X86_64;
+			case "arm64" -> Architecture.ARM64;
+			default -> throw new ParseException("Unsupported sandbox architecture: %s", arch);
+			};
+		}
 	}
 
-	private static OperatingSystem parseOperatingSystem(String os) {
-		return switch (os) {
-		case "windows" -> OperatingSystem.WINDOWS;
-		case "macos" -> OperatingSystem.MAC_OS;
-		case "linux" -> OperatingSystem.LINUX;
-		default -> throw new ParseException("Unsupported sandbox operating system: %s", os);
-		};
+	record OperatingSystemAndArchitecture(OperatingSystem operatingSystem, Architecture architecture) {
+		private static OperatingSystemAndArchitecture parse(String osAndArch) {
+			String[] parts = osAndArch.split("/");
+
+			if (parts.length != 2) {
+				throw new ParseException("Invalid os and architecture format: %s", osAndArch);
+			}
+
+			return new OperatingSystemAndArchitecture(OperatingSystem.parse(parts[0]), Architecture.parse(parts[1]));
+		}
+
+		public boolean compatibleWith(Platform platform) {
+			return operatingSystem.compatibleWith(platform) && architecture.compatibleWith(platform);
+		}
 	}
 
-	private static Architecture parseArchitecture(String arch) {
-		return switch (arch) {
-		case "x86_64" -> Architecture.X86_64;
-		case "arm64" -> Architecture.ARM64;
-		default -> throw new ParseException("Unsupported sandbox architecture: %s", arch);
-		};
+	interface Configuration {
+		/**
+		 * @return The entrypoint for the sandbox.
+		 */
+		String entrypoint();
 	}
 }
