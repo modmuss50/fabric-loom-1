@@ -27,15 +27,26 @@ package net.fabricmc.loom.configuration.fabricapi;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.function.Consumer;
 
 import javax.inject.Inject;
 
+import net.fabricmc.loom.task.RemapJarTask;
+import net.fabricmc.loom.task.prod.AbstractProductionRunTask;
+import net.fabricmc.loom.task.prod.ClientProductionRunTask;
+import net.fabricmc.loom.util.gradle.SourceSetHelper;
+
+import org.checkerframework.checker.units.qual.A;
 import org.gradle.api.Action;
+import org.gradle.api.NamedDomainObjectProvider;
 import org.gradle.api.Project;
+import org.gradle.api.artifacts.Configuration;
+import org.gradle.api.artifacts.ConfigurationContainer;
 import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.tasks.Delete;
 import org.gradle.api.tasks.OutputFile;
+import org.gradle.api.tasks.SourceSet;
 import org.gradle.api.tasks.TaskAction;
 import org.gradle.api.tasks.TaskContainer;
 
@@ -45,6 +56,9 @@ import net.fabricmc.loom.configuration.ide.RunConfigSettings;
 import net.fabricmc.loom.task.AbstractLoomTask;
 import net.fabricmc.loom.task.LoomTasks;
 import net.fabricmc.loom.util.Constants;
+
+import org.gradle.api.tasks.TaskProvider;
+import org.gradle.jvm.tasks.Jar;
 
 public abstract class FabricApiTesting extends FabricApiAbstractSourceSet {
 	@Inject
@@ -121,6 +135,62 @@ public abstract class FabricApiTesting extends FabricApiAbstractSourceSet {
 				});
 
 				tasks.named("configureLaunch", task -> task.dependsOn(acceptEula));
+			}
+		}
+
+		if (settings.getCreateProductionRunTasks().get()) {
+			configureProductionRuns(settings);
+		}
+	}
+
+	private void configureProductionRuns(GameTestSettings settings) {
+		final TaskContainer tasks = getProject().getTasks();
+		ConfigurationContainer configurations = getProject().getConfigurations();
+
+		var productionTestMods = configurations.register("productionTestMods", configuration -> {
+			configuration.setCanBeConsumed(false);
+			configuration.setCanBeResolved(true);
+			configuration.setTransitive(false);
+		});
+
+		// TODO add FabricAPI to the mods, how do we get the version? I think we need to ask for it.
+
+		var runProductionClientGameTest = tasks.register("runProductionClientGameTest", ClientProductionRunTask.class, task -> {
+			task.getMods().from(productionTestMods);
+			task.getJvmArgs().add("-Dfabric.client.gametest");
+			task.getRunDir().set(getProject().getLayout().getBuildDirectory().dir("run/clientGameTest"));
+		});
+
+		var runProductionServerGameTest = tasks.register("runProductionServerGameTest", ClientProductionRunTask.class, task -> {
+			task.getMods().from(productionTestMods);
+			task.getJvmArgs().add("-Dfabric-api.gametest");
+			task.getRunDir().set(getProject().getLayout().getBuildDirectory().dir("run/gameTest"));
+		});
+
+		List<TaskProvider<? extends AbstractProductionRunTask>> runTasks = List.of(runProductionClientGameTest, runProductionServerGameTest);
+
+		// TODO delete run dir
+		// TODO EULA
+
+		// Create a remapped jar from the custom source set and add it to the production run tasks
+		if (settings.getCreateSourceSet().get()) {
+			SourceSet gameTestSourceSet = SourceSetHelper.getSourceSetByName(getSourceSetName(), getProject());
+
+			var gametestJar = tasks.register("gametestJar", Jar.class, task -> {
+				task.getArchiveClassifier().set("devgametest");
+				task.getDestinationDirectory().set(getProject().getLayout().getBuildDirectory().map(directory -> directory.dir("devlibs")));
+				task.from(gameTestSourceSet.getOutput());
+			});
+
+			var remapGametestJar = tasks.register("remapGametestJar", RemapJarTask.class, task -> {
+				task.getArchiveClassifier().set("gametest");
+				task.getInputFile().set(gametestJar.flatMap(Jar::getArchiveFile));
+			});
+
+			for (var taskProvider : runTasks) {
+				taskProvider.configure((Action<AbstractProductionRunTask>) task -> {
+					task.getMods().from(remapGametestJar.map(Jar::getArchiveFile));
+				});
 			}
 		}
 	}

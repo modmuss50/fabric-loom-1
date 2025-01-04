@@ -79,4 +79,6 @@ public interface GameTestSettings {
 	 * <p>Default: true
 	 */
 	Property<Boolean> getClearRunDirectory();
+
+	Property<Boolean> getCreateProductionRunTasks();
 }
