@@ -26,24 +26,51 @@ package net.fabricmc.loom.configuration.providers.mappings.parchment;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.function.Supplier;
+
+import org.jetbrains.annotations.Nullable;
 
 import net.fabricmc.loom.api.mappings.layered.MappingLayer;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.util.ZipUtils;
 import net.fabricmc.mappingio.MappingVisitor;
+import net.fabricmc.mappingio.adapter.MappingSourceNsSwitch;
+import net.fabricmc.mappingio.tree.MappingTreeView;
+import net.fabricmc.mappingio.tree.MemoryMappingTree;
 
-public record ParchmentMappingLayer(Path parchmentFile, boolean removePrefix) implements MappingLayer {
+public record ParchmentMappingLayer(Path parchmentFile, boolean removePrefix, @Nullable Supplier<MemoryMappingTree> intermediarySupplier) implements MappingLayer {
 	private static final String PARCHMENT_DATA_FILE_NAME = "parchment.json";
 
 	@Override
 	public void visit(MappingVisitor mappingVisitor) throws IOException {
 		ParchmentTreeV1 parchmentData = getParchmentData();
+		MemoryMappingTree mappingTree = (MemoryMappingTree) mappingVisitor;
+
+		if (mappingTree.getNamespaceId("named") == MappingTreeView.NULL_NAMESPACE_ID) {
+			throw new IllegalStateException("Named namespace not found in mapping tree. Did you apply mappings first?");
+		}
+
+		if (mappingTree.getNamespaceId("intermediary") == MappingTreeView.NULL_NAMESPACE_ID) {
+			throw new IllegalStateException("Intermediary namespace not found in mapping tree.");
+		}
 
 		if (removePrefix()) {
 			mappingVisitor = new ParchmentPrefixStripingMappingVisitor(mappingVisitor);
 		}
 
-		parchmentData.visit(mappingVisitor, MappingsNamespace.NAMED.toString());
+		if (intermediarySupplier == null) {
+			parchmentData.visit(mappingVisitor, MappingsNamespace.NAMED.toString());
+			return;
+		}
+
+		// Read parchment into the existing mapping tree, that will already have intermediary and named mappings
+		parchmentData.visit(mappingTree, MappingsNamespace.NAMED.toString());
+
+		// The following code first switches the src namespace to intermediary dropping any entries that don't have an intermediary name
+		// This removes any none root methods before switching it back to official
+		var officialSwitch = new MappingSourceNsSwitch(mappingVisitor, getSourceNamespace().toString(), false);
+		var intermediarySwitch = new MappingSourceNsSwitch(officialSwitch, MappingsNamespace.INTERMEDIARY.toString(), true);
+		mappingTree.accept(intermediarySwitch);
 	}
 
 	private ParchmentTreeV1 getParchmentData() throws IOException {

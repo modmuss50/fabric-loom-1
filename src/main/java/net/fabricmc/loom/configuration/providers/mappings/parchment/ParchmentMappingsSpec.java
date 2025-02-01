@@ -31,6 +31,6 @@ import net.fabricmc.loom.api.mappings.layered.spec.MappingsSpec;
 public record ParchmentMappingsSpec(FileSpec fileSpec, boolean removePrefix) implements MappingsSpec<ParchmentMappingLayer> {
 	@Override
 	public ParchmentMappingLayer createLayer(MappingContext context) {
-		return new ParchmentMappingLayer(fileSpec.get(context), removePrefix());
+		return new ParchmentMappingLayer(fileSpec.get(context), removePrefix(), context.isUsingIntermediateMappings() ? context.intermediaryTree() : null);
 	}
 }
