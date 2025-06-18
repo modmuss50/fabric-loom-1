@@ -24,6 +24,10 @@
 
 package net.fabricmc.loom.test.integration
 
+
+import java.nio.file.Path
+
+import org.gradle.testkit.runner.BuildResult
 import spock.lang.Specification
 import spock.lang.Stepwise
 import spock.lang.Unroll
@@ -31,9 +35,11 @@ import spock.util.environment.RestoreSystemProperties
 
 import net.fabricmc.loom.test.util.GradleProjectTestTrait
 import net.fabricmc.loom.test.util.MockMavenServerTrait
+import net.fabricmc.loom.util.Platform
 
 import static java.lang.System.setProperty
-import static net.fabricmc.loom.test.LoomTestConstants.*
+import static net.fabricmc.loom.test.LoomTestConstants.DEFAULT_GRADLE
+import static net.fabricmc.loom.test.LoomTestConstants.PRE_RELEASE_GRADLE
 import static org.gradle.testkit.runner.TaskOutcome.SUCCESS
 
 /**
@@ -49,7 +55,7 @@ class MavenProjectTest extends Specification implements MockMavenServerTrait, Gr
 		def gradle = gradleProject(project: "mavenLibrary", version: gradleVersion, sharedFiles: true)
 
 		when:
-		def result = gradle.run(tasks: ["clean", "publish"])
+		def result = gradle.run(tasks: ["clean", "publish", "publishToMavenLocal"])
 
 		then:
 		result.task(":publish").outcome == SUCCESS
@@ -97,5 +103,42 @@ class MavenProjectTest extends Specification implements MockMavenServerTrait, Gr
 		'master-SNAPSHOT:classifier' | DEFAULT_GRADLE
 		getLatestSnapshotVersion("com.example", "fabric-example-lib", "2.0.0-SNAPSHOT") | DEFAULT_GRADLE
 		getLatestSnapshotVersion("com.example", "fabric-example-lib", "2.0.0-SNAPSHOT") | PRE_RELEASE_GRADLE
+	}
+
+	// Test to ensure that we can resolve a dependency from a read-only maven local directory.
+	@RestoreSystemProperties
+	def "resolve readonly"() {
+		given:
+		setProperty('loom.test.resolve', "com.example:fabric-example-lib:1.0.0")
+		setProperty('loom.test.useMavenLocal', "true")
+		def gradle = gradleProject(project: "maven", version: DEFAULT_GRADLE, sharedFiles: true)
+
+		when:
+		BuildResult result = null
+
+		try {
+			setFilePermissions(gradle.mavenLocalDir.toPath(), true)
+			result = gradle.run(tasks: ["clean", "build"])
+		} finally {
+			// Reset the permissions so we don't leave a mess behind
+			setFilePermissions(gradle.mavenLocalDir.toPath(), false)
+		}
+
+		then:
+		result.task(":build").outcome == SUCCESS
+	}
+
+	def setFilePermissions(Path dir, boolean readOnly) {
+		if (Platform.CURRENT.operatingSystem.isWindows()) {
+			return
+		}
+
+		def command = readOnly ? "chmod -R a-w ${dir}" : "chmod -R a+w ${dir}"
+		def process = command.execute()
+		process.waitFor()
+
+		if (process.exitValue() != 0) {
+			throw new RuntimeException("Failed to set permissions on ${dir} to read-only: ${process.err.text}")
+		}
 	}
 }

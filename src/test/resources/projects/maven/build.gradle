@@ -7,9 +7,13 @@ version = "1.0.0"
 group = "com.example"
 
 repositories {
-	maven {
-		url = "http://localhost:${System.getProperty("loom.test.mavenPort")}/"
-		allowInsecureProtocol = true
+	if (Boolean.getBoolean("loom.test.useMavenLocal")) {
+		mavenLocal()
+	} else {
+		maven {
+			url = "http://localhost:${System.getProperty("loom.test.mavenPort")}/"
+			allowInsecureProtocol = true
+		}
 	}
 }
 
