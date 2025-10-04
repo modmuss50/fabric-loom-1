@@ -47,9 +47,15 @@ if (libs.versions.kotlin.get() != kotlinVersion) {
 }
 
 repositories {
-	maven {
-		name = 'Fabric'
-		url = 'https://maven.fabricmc.net/'
+	exclusiveContent {
+		forRepository {
+			maven {
+				url = "https://maven.fabricmc.net/"
+			}
+		}
+		filter {
+			includeGroupAndSubgroups "net.fabricmc"
+		}
 	}
 	mavenCentral()
 }
