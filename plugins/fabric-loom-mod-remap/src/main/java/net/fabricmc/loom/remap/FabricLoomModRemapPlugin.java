@@ -24,18 +24,12 @@
 
 package net.fabricmc.loom.remap;
 
-import org.gradle.api.Plugin;
 import org.gradle.api.Project;
-import org.gradle.api.plugins.PluginAware;
 
-public class FabricLoomModRemapPlugin implements Plugin<PluginAware> {
+import net.fabricmc.loom.base.FabricLoomAbstractPlugin;
+
+public class FabricLoomModRemapPlugin extends FabricLoomAbstractPlugin {
 	@Override
-	public void apply(PluginAware target) {
-		if (target instanceof Project project) {
-			apply(project);
-		}
-	}
-
-	private void apply(Project project) {
+	protected void apply(Project project) {
 	}
 }

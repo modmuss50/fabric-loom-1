@@ -1,7 +1,7 @@
 /*
  * This file is part of fabric-loom, licensed under the MIT License (MIT).
  *
- * Copyright (c) 2025 FabricMC
+ * Copyright (c) 2016-2021 FabricMC
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,16 +22,19 @@
  * SOFTWARE.
  */
 
-package net.fabricmc.loom;
+package net.fabricmc.loom.minecraft.task.run;
 
-import org.gradle.api.Plugin;
-import org.gradle.api.Project;
-import org.jetbrains.annotations.NotNull;
-public class LoomCompanionGradlePlugin implements Plugin<Project> {
-	public static final String NAME = "net.fabricmc.fabric-loom-companion";
+import javax.inject.Inject;
 
-	@Override
-	public void apply(@NotNull Project project) {
-		
+import net.fabricmc.loom.configuration.ide.RunConfig;
+import net.fabricmc.loom.configuration.ide.RunConfigSettings;
+
+public abstract class RunGameTask extends AbstractRunTask {
+	@Inject
+	public RunGameTask(RunConfigSettings settings) {
+		super(proj -> RunConfig.runConfig(proj, settings));
+
+		// Defaults to empty, forwards stdin to mc.
+		setStandardInput(System.in);
 	}
 }

@@ -22,16 +22,30 @@
  * SOFTWARE.
  */
 
-package net.fabricmc.loom;
+package net.fabricmc.loom.minecraft.task.run;
 
-import org.gradle.api.Plugin;
-import org.gradle.api.Project;
-import org.jetbrains.annotations.NotNull;
-public class LoomCompanionGradlePlugin implements Plugin<Project> {
-	public static final String NAME = "net.fabricmc.fabric-loom-companion";
+import java.io.IOException;
 
-	@Override
-	public void apply(@NotNull Project project) {
-		
+import org.gradle.api.DefaultTask;
+import org.gradle.api.file.RegularFileProperty;
+import org.gradle.api.tasks.InputFile;
+import org.gradle.api.tasks.TaskAction;
+
+import net.fabricmc.loom.util.Constants;
+
+public abstract class RenderDocRunUITask extends DefaultTask {
+	@InputFile
+	public abstract RegularFileProperty getRenderDocExecutable();
+
+	public RenderDocRunUITask() {
+		setGroup(Constants.TaskGroup.FABRIC);
+	}
+
+	@TaskAction
+	public void run() throws IOException {
+		ProcessBuilder builder = new ProcessBuilder()
+				.command(getRenderDocExecutable().getAsFile().get().getAbsolutePath());
+		builder.start();
+		// Allow to run in the background.
 	}
 }

@@ -10,3 +10,10 @@ gradlePlugin {
 		}
 	}
 }
+
+dependencies {
+	api project(":")
+
+	api libs.gson
+	api libs.bundles.asm
+}

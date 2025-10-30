@@ -1,7 +1,7 @@
 /*
  * This file is part of fabric-loom, licensed under the MIT License (MIT).
  *
- * Copyright (c) 2025 FabricMC
+ * Copyright (c) 2021 FabricMC
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,16 +22,31 @@
  * SOFTWARE.
  */
 
-package net.fabricmc.loom;
+package net.fabricmc.loom.minecraft.task.run;
 
-import org.gradle.api.Plugin;
-import org.gradle.api.Project;
-import org.jetbrains.annotations.NotNull;
-public class LoomCompanionGradlePlugin implements Plugin<Project> {
-	public static final String NAME = "net.fabricmc.fabric-loom-companion";
+import java.io.File;
 
-	@Override
-	public void apply(@NotNull Project project) {
-		
+import javax.inject.Inject;
+
+import org.gradle.api.tasks.Sync;
+
+import net.fabricmc.loom.LoomGradleExtension;
+import net.fabricmc.loom.util.Constants;
+
+public abstract class ExtractNativesTask extends Sync {
+	@Inject
+	public ExtractNativesTask() {
+		// Is there a lazy way to do this for many files? - Doesnt seem there is...
+		for (File nativeFile : getProject().getConfigurations().getByName(Constants.Configurations.MINECRAFT_NATIVES).getFiles()) {
+			from(getProject().zipTree(nativeFile), copySpec -> {
+				copySpec.exclude("META-INF/**");
+				// Fix pre LWJGL 3 versions on Macos. See: https://github.com/FabricMC/fabric-loom/issues/955
+				copySpec.rename(s -> s.replace(".jnilib", ".dylib"));
+			});
+		}
+
+		into(LoomGradleExtension.get(getProject()).getFiles().getNativesDirectory(getProject()));
+
+		setDescription("Downloads and extracts the minecraft natives");
 	}
 }

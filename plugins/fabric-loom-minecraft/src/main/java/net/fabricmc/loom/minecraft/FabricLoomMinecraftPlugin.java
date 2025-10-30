@@ -24,18 +24,15 @@
 
 package net.fabricmc.loom.minecraft;
 
-import org.gradle.api.Plugin;
 import org.gradle.api.Project;
-import org.gradle.api.plugins.PluginAware;
 
-public class FabricLoomMinecraftPlugin implements Plugin<PluginAware> {
+import net.fabricmc.loom.base.FabricLoomAbstractPlugin;
+import net.fabricmc.loom.minecraft.api.fabricapi.FabricApiExtension;
+import net.fabricmc.loom.minecraft.fabricapi.FabricApiExtensionImpl;
+
+public class FabricLoomMinecraftPlugin extends FabricLoomAbstractPlugin {
 	@Override
-	public void apply(PluginAware target) {
-		if (target instanceof Project project) {
-			apply(project);
-		}
-	}
-
-	private void apply(Project project) {
+	protected void apply(Project project) {
+		project.getExtensions().create(FabricApiExtension.class, "fabricApi", FabricApiExtensionImpl.class);
 	}
 }

@@ -25,26 +25,30 @@
 package net.fabricmc.loom.base;
 
 import java.util.Objects;
+import java.util.function.Supplier;
 
-import org.gradle.api.Plugin;
 import org.gradle.api.Project;
-import org.gradle.api.plugins.PluginAware;
+import org.gradle.internal.impldep.com.google.gson.Gson;
+import org.gradle.internal.impldep.com.google.gson.GsonBuilder;
 
 import net.fabricmc.loom.base.api.LoomBaseExtension;
+import net.fabricmc.loom.base.task.ExportClasspathTask;
+import net.fabricmc.loom.configuration.LoomConfigurations;
+import net.fabricmc.loom.util.Constants;
+import net.fabricmc.loom.util.Lazy;
 
-public class FabricLoomBasePlugin implements Plugin<PluginAware> {
+public class FabricLoomBasePlugin extends FabricLoomAbstractPlugin {
 	public static final String LOOM_VERSION = Objects.requireNonNullElse(FabricLoomBasePlugin.class.getPackage().getImplementationVersion(), "0.0.0+unknown");
+	public static final Supplier<Gson> GSON = Lazy.of(() -> new GsonBuilder().setPrettyPrinting().create());
 
 	@Override
-	public void apply(PluginAware target) {
-		if (target instanceof Project project) {
-			apply(project);
-		}
-	}
-
-	private void apply(Project project) {
+	protected void apply(Project project) {
 		project.getLogger().lifecycle("Fabric Loom: " + LOOM_VERSION);
 
 		project.getExtensions().create(LoomBaseExtension.class, LoomBaseExtensionImpl.NAME, LoomBaseExtensionImpl.class);
+
+		var exportClassPathTask = project.getTasks().register(Constants.Task.EXPORT_CLASSPATH, ExportClasspathTask.class);
+		project.getConfigurations().register(Constants.Configurations.EXPORTED_CLASSPATH, LoomConfigurations.Role.CONSUMABLE::apply);
+		project.artifacts(artifactHandler -> artifactHandler.add(Constants.Configurations.EXPORTED_CLASSPATH, exportClassPathTask));
 	}
 }

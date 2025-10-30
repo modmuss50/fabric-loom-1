@@ -27,7 +27,7 @@ package net.fabricmc.loom.test.unit
 import org.gradle.api.Project
 import spock.lang.Specification
 
-import net.fabricmc.loom.configuration.fabricapi.FabricApiVersions
+import FabricApiVersions
 import net.fabricmc.loom.test.util.GradleTestUtil
 
 class FabricApiExtensionTest extends Specification {

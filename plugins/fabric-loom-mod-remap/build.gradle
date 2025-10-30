@@ -10,3 +10,9 @@ gradlePlugin {
 		}
 	}
 }
+
+dependencies {
+	api project(":plugins:fabric-loom-minecraft")
+
+	api libs.fabric.tiny.remapper
+}

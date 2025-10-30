@@ -10,3 +10,9 @@ gradlePlugin {
 		}
 	}
 }
+
+
+dependencies {
+	api project(":plugins:fabric-loom-base")
+	api libs.fabric.clazz.tweaker
+}

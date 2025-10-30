@@ -47,7 +47,7 @@ class DownloadTaskTest extends DownloadTest implements GradleProjectTestTrait {
                     mappings "net.fabricmc:yarn:1.21.4+build.8:v2"
                 }
 
-                tasks.register("download", net.fabricmc.loom.task.DownloadTask) {
+                tasks.register("download", net.fabricmc.loom.base.task.DownloadTask) {
                     url = "${PATH}/simpleFile"
                     output = file("out.txt")
                 }
@@ -78,7 +78,7 @@ class DownloadTaskTest extends DownloadTest implements GradleProjectTestTrait {
                     mappings "net.fabricmc:yarn:1.21.4+build.8:v2"
                 }
 
-                tasks.register("download", net.fabricmc.loom.task.DownloadTask) {
+                tasks.register("download", net.fabricmc.loom.base.task.DownloadTask) {
                     url = "${PATH}/simpleFile"
                     sha1 = "0a4d55a8d778e5022fab701977c5d840bbc486d0"
                     output = file("out.txt")
@@ -110,7 +110,7 @@ class DownloadTaskTest extends DownloadTest implements GradleProjectTestTrait {
                     mappings "net.fabricmc:yarn:1.21.4+build.8:v2"
                 }
 
-                tasks.register("download", net.fabricmc.loom.task.DownloadTask) {
+                tasks.register("download", net.fabricmc.loom.base.task.DownloadTask) {
                     url = "${PATH}/simpleFile"
                     maxAge = Duration.ofDays(1)
                     output = file("out.txt")
