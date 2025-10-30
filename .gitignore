@@ -23,4 +23,10 @@
 !/codenarc.groovy
 !/bootstrap
 
+!/buildSrc/
+!/plugins/
+
 /src/**/generated
+
+build/
+.gradle

@@ -1,0 +1,12 @@
+plugins {
+	id "fabric-loom-plugin"
+}
+
+gradlePlugin {
+	plugins {
+		fabricLoomMinecraft {
+			id = 'fabric-loom-minecraft'
+			implementationClass = 'net.fabricmc.loom.FabricLoomMinecraftPlugin'
+		}
+	}
+}

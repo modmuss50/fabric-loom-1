@@ -10,3 +10,8 @@ dependencyResolutionManagement {
 		}
 	}
 }
+
+include "plugins:fabric-loom-base"
+include "plugins:fabric-loom-minecraft"
+include "plugins:fabric-loom-mod"
+include "plugins:fabric-loom-mod-remap"

@@ -1,15 +1,13 @@
 plugins {
 	id 'java'
 	id 'maven-publish'
-	id 'java-gradle-plugin'
 	id 'idea'
 	id 'eclipse'
 	id 'groovy'
-	id 'checkstyle'
 	id 'codenarc'
 	alias(libs.plugins.kotlin)
-	alias(libs.plugins.spotless)
 	alias(libs.plugins.retry)
+	id 'fabric-loom-plugin'
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -44,14 +42,6 @@ Project.class.getClassLoader().getResource("gradle-kotlin-dsl-versions.propertie
 def kotlinVersion = props.getProperty("kotlin")
 if (libs.versions.kotlin.get() != kotlinVersion) {
 	throw new IllegalStateException("Requires Kotlin version: ${kotlinVersion}")
-}
-
-repositories {
-	maven {
-		name = 'Fabric'
-		url = 'https://maven.fabricmc.net/'
-	}
-	mavenCentral()
 }
 
 configurations.configureEach {
@@ -90,8 +80,6 @@ sourceSets {
 }
 
 dependencies {
-	implementation gradleApi()
-
 	// libraries
 	implementation libs.gson
 	implementation libs.bundles.asm
@@ -184,24 +172,7 @@ base {
 	archivesName = project.name
 }
 
-tasks.withType(JavaCompile).configureEach {
-	it.options.release = 21
-}
-
-java {
-	withSourcesJar()
-	sourceCompatibility = JavaVersion.VERSION_21
-	targetCompatibility = JavaVersion.VERSION_21
-}
-
 spotless {
-	lineEndings = com.diffplug.spotless.LineEnding.UNIX
-
-	java {
-		licenseHeaderFile(rootProject.file("HEADER")).yearSeparator("-")
-		targetExclude("**/loom/util/DownloadUtil.java")
-	}
-
 	groovy {
 		importOrder('java', 'javax', '', 'net.fabricmc', '\\#')
 		licenseHeaderFile(rootProject.file("HEADER")).yearSeparator("-")
