@@ -62,6 +62,10 @@ jobs:
       -
         id: set-matrix
         run: echo "matrix=$(cat build/test_matrix.json)" >> $GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-batches
+          path: build/test_batches.json
 
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -72,7 +76,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test: ${{ fromJson(needs.prepare_test_matrix.outputs.matrix) }}
+        batch: ${{ fromJson(needs.prepare_test_matrix.outputs.matrix) }}
 
     runs-on: ubuntu-24.04
 
@@ -83,7 +87,14 @@ jobs:
         with:
           java-version: 21
           distribution: 'temurin'
-      - run: ./gradlew printActionsTestName --name="${{ matrix.test }}" test --tests ${{ matrix.test }} --stacktrace --warning-mode fail
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-batches
+          path: build/
+      - name: Run batch tests
+        run: |
+          TESTS=$(jq -r ".\"${{ matrix.batch }}\" | join(\" --tests \")" build/test_batches.json)
+          ./gradlew test --tests $TESTS --stacktrace --warning-mode fail
         env:
           TEST_WARNING_MODE: fail
           EXTENDED_TESTS: ${{ github.event.inputs.extended_tests }}
@@ -92,12 +103,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ failure() }}
         with:
-          name: ${{ steps.test.outputs.test }} Results
+          name: Batch ${{ matrix.batch }} Results
           path: build/reports/
       - uses: actions/upload-artifact@v4
         if: ${{ failure() }}
         with:
-          name: ${{ steps.test.outputs.test }} Heap Dump
+          name: Batch ${{ matrix.batch }} Heap Dump
           path: "*.hprof"
 
   run_tests_windows:
@@ -108,7 +119,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test: ${{ fromJson(needs.prepare_test_matrix.outputs.matrix) }}
+        batch: ${{ fromJson(needs.prepare_test_matrix.outputs.matrix) }}
 
     runs-on: windows-2025
 
@@ -119,7 +130,14 @@ jobs:
         with:
           java-version: 21
           distribution: 'temurin'
-      - run: ./gradlew printActionsTestName --name="${{ matrix.test }}" test --tests ${{ matrix.test }} --stacktrace --warning-mode fail
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-batches
+          path: build/
+      - name: Run batch tests
+        run: |
+          $tests = (Get-Content build/test_batches.json | ConvertFrom-Json)."${{ matrix.batch }}" -join " --tests "
+          ./gradlew test --tests $tests --stacktrace --warning-mode fail
         env:
           TEST_WARNING_MODE: fail
         id: test
@@ -127,12 +145,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ failure() }}
         with:
-          name: ${{ steps.test.outputs.test }} (${{ matrix.java }}) Results (Windows)
+          name: Batch ${{ matrix.batch }} Results (Windows)
           path: build/reports/
       - uses: actions/upload-artifact@v4
         if: ${{ failure() }}
         with:
-          name: ${{ steps.test.outputs.test }} Heap Dump (Windows)
+          name: Batch ${{ matrix.batch }} Heap Dump (Windows)
           path: "*.hprof"
 
   # Special case this test to run across all os's

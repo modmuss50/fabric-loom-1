@@ -365,10 +365,27 @@ tasks.register('writeActionsTestMatrix') {
 		// Run all the unit tests together
 		testMatrix.add("net.fabricmc.loom.test.unit.*")
 
-		def json = groovy.json.JsonOutput.toJson(testMatrix)
-		def output = file("build/test_matrix.json")
-		output.parentFile.mkdir()
-		output.text = json
+		// Divide tests into 20 batches
+		def batchCount = 20
+		def batches = [:]
+		testMatrix.eachWithIndex { test, index ->
+			def batchIndex = index % batchCount
+			if (!batches.containsKey(batchIndex)) {
+				batches[batchIndex] = []
+			}
+			batches[batchIndex].add(test)
+		}
+
+		// Output batch indices for matrix
+		def matrixJson = groovy.json.JsonOutput.toJson((0..<batchCount).collect { it })
+		def matrixOutput = file("build/test_matrix.json")
+		matrixOutput.parentFile.mkdir()
+		matrixOutput.text = matrixJson
+
+		// Output full batch mapping
+		def batchesJson = groovy.json.JsonOutput.toJson(batches)
+		def batchesOutput = file("build/test_batches.json")
+		batchesOutput.text = batchesJson
 	}
 }
 
