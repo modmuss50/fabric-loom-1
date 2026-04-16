@@ -1,0 +1,66 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+		000000000000000000000001 = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 000000000000000000000005;
+			buildPhases = (
+			);
+			dependencies = (
+			);
+			name = Minecraft;
+			productName = Minecraft;
+		};
+
+		000000000000000000000002 = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+			};
+			buildConfigurationList = 000000000000000000000006;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				000000000000000000000001,
+			);
+		};
+
+		000000000000000000000003 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = Minecraft;
+			};
+			name = Debug;
+		};
+		000000000000000000000004 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+
+		000000000000000000000005 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000000003,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		000000000000000000000006 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000000004,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+
+	};
+	rootObject = 000000000000000000000002;
+}

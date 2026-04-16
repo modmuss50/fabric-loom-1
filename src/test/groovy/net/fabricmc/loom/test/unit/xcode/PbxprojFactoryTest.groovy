@@ -24,16 +24,35 @@
 
 package net.fabricmc.loom.test.unit.xcode
 
+import org.gradle.api.Project
+import org.gradle.api.model.ObjectFactory
+
+import net.fabricmc.loom.api.RunConfiguration
 import net.fabricmc.loom.task.tool.xcode.PbxprojFactory
+import org.gradle.api.provider.Property
 import spock.lang.Specification
 
-class PbxprojFactoryTest extends Specification {
+import net.fabricmc.loom.test.util.GradleTestUtil
 
-	def "generates expected pbxproj output"() {
+class PbxprojFactoryTest extends Specification {
+	static Project project = GradleTestUtil.mockProject()
+	static ObjectFactory objectFactory = project.getObjects()
+
+	def "generates expected pbxproj output with no runs"() {
 		given:
 		def expected = PbxprojFactoryTest.getResourceAsStream("PbxprojFactoryTest.pbxproj").text
 
 		expect:
 		new PbxprojFactory().generate("MyProject", []).serialize() == expected
+	}
+
+	def "generates expected pbxproj output with one run"() {
+		given:
+		def expected = PbxprojFactoryTest.getResourceAsStream("PbxprojFactoryTest_withRuns.pbxproj").text
+		def run = objectFactory.newInstance(RunConfiguration, "client")
+		run.displayName.set("Minecraft")
+
+		expect:
+		new PbxprojFactory().generate("MyProject", [run]).serialize() == expected
 	}
 }
