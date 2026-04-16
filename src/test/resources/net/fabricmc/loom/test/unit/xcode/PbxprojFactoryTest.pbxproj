@@ -1,0 +1,39 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+		000000000000000000000001 = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+			};
+			buildConfigurationList = 000000000000000000000003;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+			);
+		};
+
+		000000000000000000000002 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+
+		000000000000000000000003 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000000002,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+
+	};
+	rootObject = 000000000000000000000001;
+}

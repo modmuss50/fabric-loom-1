@@ -1,0 +1,27 @@
+// !$*UTF8*$!
+{
+	strKey = "hello world";
+	simple = abc;
+	empty = "";
+	boolTrue = YES;
+	boolFalse = NO;
+	count = 42;
+	namedRef = 000000000000000000000001;
+	anonRef = 000000000000000000000002;
+	nested = {
+		x = y;
+	};
+	items = (
+		foo,
+		NO,
+		9,
+		000000000000000000000001,
+	);
+
+	000000000000000000000001 = {
+		isa = FakeISA;
+	};
+	000000000000000000000002 = {
+		isa = FakeISA;
+	};
+}

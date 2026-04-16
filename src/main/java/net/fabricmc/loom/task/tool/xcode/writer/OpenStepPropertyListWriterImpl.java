@@ -1,6 +1,5 @@
 package net.fabricmc.loom.task.tool.xcode.writer;
 
-import java.io.IOException;
 import java.io.StringWriter;
 import java.util.IdentityHashMap;
 import java.util.Map;
@@ -9,15 +8,23 @@ import net.fabricmc.loom.task.tool.xcode.OpenStepPropertyList;
 
 public class OpenStepPropertyListWriterImpl implements OpenStepPropertyListWriter {
 	private final StringWriter writer;
-
-	private final Map<OpenStepPropertyList.BaseObject, Integer> objectIds = new IdentityHashMap<>();
+	private final Map<OpenStepPropertyList.BaseObject, String> objectIds = new IdentityHashMap<>();
+	private int idCounter = 1;
 	private int indentLevel = 0;
 
 	public OpenStepPropertyListWriterImpl(StringWriter writer) {
 		this.writer = writer;
 	}
 
-	void line(String line) {
+	public String allocId(OpenStepPropertyList.BaseObject obj) {
+		return objectIds.computeIfAbsent(obj, k -> String.format("%024X", idCounter++));
+	}
+
+	public String refStr(OpenStepPropertyList.ObjRef<?> ref) {
+		return allocId(ref.obj());
+	}
+
+	private void writeLine(String line) {
 		for (int i = 0; i < indentLevel; i++) {
 			writer.write("\t");
 		}
@@ -25,59 +32,124 @@ public class OpenStepPropertyListWriterImpl implements OpenStepPropertyListWrite
 		writer.write("\n");
 	}
 
-	void line(String format, Object... args) {
-		line(String.format(format, args));
+	private void writeLine(String format, Object... args) {
+		writeLine(String.format(format, args));
 	}
 
-	int getId(OpenStepPropertyList.BaseObject obj) {
-		return objectIds.computeIfAbsent(obj, k -> objectIds.size() + 1);
+	private void writeRawLine(String line) {
+		writer.write(line);
+		writer.write("\n");
 	}
 
-	int getId(OpenStepPropertyList.ObjRef<?> ref) {
-		return getId(ref.obj());
+	private static String formatString(String value) {
+		if (value.isEmpty() || !value.matches("[A-Za-z0-9_./$\\-]+")) {
+			return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+		}
+		return value;
 	}
 
 	@Override
 	public Obj pushRoot() {
-		line("// !$*UTF8*$!");
-		return new ObjImpl();
+		writeRawLine("// !$*UTF8*$!");
+		return new ObjImpl(null);
 	}
 
-	private class ObjImpl implements Obj {
-		public ObjImpl() {
-			line("{" );
+	private class ObjImpl implements OpenStepPropertyListWriter.Obj {
+		ObjImpl(String openLine) {
+			if (openLine != null) {
+				writeLine(openLine);
+			} else {
+				writeRawLine("{");
+			}
 			indentLevel++;
 		}
 
 		@Override
 		public void write(String key, String value) {
-			line("%s = \"%s\";", key, value.replace("\"", "\\\""));
+			writeLine("%s = %s;", formatString(key), formatString(value));
 		}
 
 		@Override
 		public void write(String key, boolean value) {
-			line("%s = %s;", key, value ? "YES" : "NO");
+			writeLine("%s = %s;", formatString(key), value ? "YES" : "NO");
 		}
 
 		@Override
 		public void write(String key, int value) {
-			line("%s = %d;", key, value);
+			writeLine("%s = %d;", formatString(key), value);
 		}
 
 		@Override
 		public void write(String key, OpenStepPropertyList.ObjRef<?> value) {
-			line("%s = *%d;", key, getId(value));
+			writeLine("%s = %s;", formatString(key), refStr(value));
 		}
 
 		@Override
-		public Obj pushObject(OpenStepPropertyList.BaseObject obj) {
-			return new ObjImpl();
+		public Obj pushObj(String key) {
+			return new ObjImpl(formatString(key) + " = {") {
+				@Override
+				public void close() {
+					indentLevel--;
+					writeLine("};");
+				}
+			};
 		}
 
 		@Override
-		public void close() throws IOException {
+		public Array pushArray(String key) {
+			writeLine("%s = (", formatString(key));
+			indentLevel++;
+			return new ArrayImpl();
+		}
+
+		@Override
+		public Obj pushObjectEntry(OpenStepPropertyList.BaseObject obj) {
+			return new ObjImpl(allocId(obj) + " = {") {
+				@Override
+				public void close() {
+					indentLevel--;
+					writeLine("};");
+				}
+			};
+		}
+
+		@Override
+		public void writeBlankLine() {
+			writeRawLine("");
+		}
+
+		@Override
+		public void close() {
 			indentLevel--;
-			line("}");
+			writeLine("}");
+		}
+	}
+
+	private class ArrayImpl implements OpenStepPropertyListWriter.Array {
+		@Override
+		public void write(String value) {
+			writeLine("%s,", formatString(value));
+		}
+
+		@Override
+		public void write(boolean value) {
+			writeLine("%s,", value ? "YES" : "NO");
+		}
+
+		@Override
+		public void write(int value) {
+			writeLine("%d,", value);
+		}
+
+		@Override
+		public void write(OpenStepPropertyList.ObjRef<?> value) {
+			writeLine("%s,", refStr(value));
+		}
+
+		@Override
+		public void close() {
+			indentLevel--;
+			writeLine(");");
 		}
 	}
 }
