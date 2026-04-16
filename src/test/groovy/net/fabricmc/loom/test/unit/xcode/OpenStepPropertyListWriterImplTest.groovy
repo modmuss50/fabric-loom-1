@@ -24,9 +24,10 @@
 
 package net.fabricmc.loom.test.unit.xcode
 
+import spock.lang.Specification
+
 import net.fabricmc.loom.task.tool.xcode.OpenStepPropertyList
 import net.fabricmc.loom.task.tool.xcode.writer.OpenStepPropertyListWriterImpl
-import spock.lang.Specification
 
 class OpenStepPropertyListWriterImplTest extends Specification {
 

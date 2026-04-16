@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Scheme LastUpgradeVersion="1500" version="1.8">
+   <BuildAction buildImplicitDependencies="YES" parallelizeBuildables="YES"/>
+   <LaunchAction buildConfiguration="Debug" customWorkingDirectory="/project/run" debugDocumentVersioning="YES" ignoresPersistentStateOnLaunch="NO" launchStyle="0" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB" useCustomWorkingDirectory="YES">
+      <PathRunnable FilePath="/usr/bin/java" runnableDebuggingMode="0"/>
+      <CommandLineArguments>
+         <CommandLineArgument argument="@/tmp/classpath.txt" isEnabled="YES"/>
+         <CommandLineArgument argument="-XstartOnFirstThread" isEnabled="YES"/>
+         <CommandLineArgument argument="-Xmx2G" isEnabled="YES"/>
+         <CommandLineArgument argument="com.example.Main" isEnabled="YES"/>
+         <CommandLineArgument argument="--gameDir" isEnabled="YES"/>
+         <CommandLineArgument argument="/run" isEnabled="YES"/>
+      </CommandLineArguments>
+      <EnvironmentVariables>
+         <EnvironmentVariable isEnabled="YES" key="MY_VAR" value="my_value"/>
+      </EnvironmentVariables>
+      <SignalSettings shouldStopForInternalExceptions="NO">
+         <Signals>
+            <Signal name="SIGSEGV" shouldStop="NO"/>
+            <Signal name="SIGBUS" shouldStop="NO"/>
+            <Signal name="SIGILL" shouldStop="NO"/>
+            <Signal name="SIGTRAP" shouldStop="NO"/>
+            <Signal name="SIGABRT" shouldStop="NO"/>
+         </Signals>
+      </SignalSettings>
+   </LaunchAction>
+</Scheme>

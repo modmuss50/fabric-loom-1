@@ -1,7 +1,7 @@
 /*
  * This file is part of fabric-loom, licensed under the MIT License (MIT).
  *
- * Copyright (c) 2025 FabricMC
+ * Copyright (c) 2026 FabricMC
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,36 +22,34 @@
  * SOFTWARE.
  */
 
-package net.fabricmc.loom.test.unit.xcode
+package net.fabricmc.loom.task.tool.xcode;
 
-import org.gradle.api.Project
-import org.gradle.api.model.ObjectFactory
-import org.gradle.api.provider.Property
-import spock.lang.Specification
+import java.io.File;
 
-import net.fabricmc.loom.api.RunConfiguration
-import net.fabricmc.loom.task.tool.xcode.PbxprojFactory
-import net.fabricmc.loom.test.util.GradleTestUtil
+import org.gradle.api.file.ConfigurableFileCollection;
+import org.gradle.api.provider.Property;
+import org.gradle.api.tasks.Classpath;
+import org.gradle.api.tasks.Nested;
+import org.gradle.jvm.toolchain.JavaLauncher;
 
-class PbxprojFactoryTest extends Specification {
-	static Project project = GradleTestUtil.mockProject()
-	static ObjectFactory objectFactory = project.getObjects()
+import net.fabricmc.loom.api.RunConfiguration;
 
-	def "generates expected pbxproj output with no runs"() {
-		given:
-		def expected = PbxprojFactoryTest.getResourceAsStream("PbxprojFactoryTest.pbxproj").text
+public interface XcschemeInput {
+	@Nested
+	Property<RunConfiguration> getRunConfiguration();
 
-		expect:
-		new PbxprojFactory().generate("MyProject", []).serialize() == expected
-	}
+	@Nested
+	Property<JavaLauncher> getJavaLauncher();
 
-	def "generates expected pbxproj output with one run"() {
-		given:
-		def expected = PbxprojFactoryTest.getResourceAsStream("PbxprojFactoryTest_withRuns.pbxproj").text
-		def run = objectFactory.newInstance(RunConfiguration, "client")
-		run.displayName.set("Minecraft")
+	@Classpath
+	ConfigurableFileCollection getClasspath();
 
-		expect:
-		new PbxprojFactory().generate("MyProject", [run]).serialize() == expected
+	default String generate(File classpathFile) {
+		String classpathArg = XcodeClasspathFileFactory.generate(getClasspath().getFiles(), classpathFile);
+		return new XcschemeFactory().generate(
+				getRunConfiguration().get(),
+				getJavaLauncher().get().getExecutablePath().getAsFile(),
+				classpathArg
+		);
 	}
 }

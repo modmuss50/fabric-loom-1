@@ -1,0 +1,2 @@
+-classpath
+/libs/foo.jar:/libs/bar.jar:/libs/baz" "with" "spaces.jar

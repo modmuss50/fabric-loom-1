@@ -1,7 +1,7 @@
 /*
  * This file is part of fabric-loom, licensed under the MIT License (MIT).
  *
- * Copyright (c) 2025 FabricMC
+ * Copyright (c) 2026 FabricMC
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,34 +24,30 @@
 
 package net.fabricmc.loom.test.unit.xcode
 
-import org.gradle.api.Project
-import org.gradle.api.model.ObjectFactory
-import org.gradle.api.provider.Property
 import spock.lang.Specification
+import spock.lang.TempDir
 
-import net.fabricmc.loom.api.RunConfiguration
-import net.fabricmc.loom.task.tool.xcode.PbxprojFactory
-import net.fabricmc.loom.test.util.GradleTestUtil
+import net.fabricmc.loom.task.tool.xcode.XcodeClasspathFileFactory
 
-class PbxprojFactoryTest extends Specification {
-	static Project project = GradleTestUtil.mockProject()
-	static ObjectFactory objectFactory = project.getObjects()
+class XcodeClasspathFileFactoryTest extends Specification {
+	@TempDir
+	File tempDir
 
-	def "generates expected pbxproj output with no runs"() {
+	def "generates classpath arg file"() {
 		given:
-		def expected = PbxprojFactoryTest.getResourceAsStream("PbxprojFactoryTest.pbxproj").text
+		def outputFile = new File(tempDir, "args/classpath.txt")
+		def classpath = [
+			new File("/libs/foo.jar"),
+			new File("/libs/bar.jar"),
+			new File("/libs/baz with spaces.jar")
+		]
+		def expected = XcodeClasspathFileFactoryTest.getResourceAsStream("XcodeClasspathFileFactoryTest.txt").text
 
-		expect:
-		new PbxprojFactory().generate("MyProject", []).serialize() == expected
-	}
+		when:
+		def arg = XcodeClasspathFileFactory.generate(classpath, outputFile)
 
-	def "generates expected pbxproj output with one run"() {
-		given:
-		def expected = PbxprojFactoryTest.getResourceAsStream("PbxprojFactoryTest_withRuns.pbxproj").text
-		def run = objectFactory.newInstance(RunConfiguration, "client")
-		run.displayName.set("Minecraft")
-
-		expect:
-		new PbxprojFactory().generate("MyProject", [run]).serialize() == expected
+		then:
+		arg == "@" + outputFile.absolutePath
+		outputFile.text == expected
 	}
 }

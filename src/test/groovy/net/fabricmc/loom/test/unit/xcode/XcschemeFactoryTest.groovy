@@ -26,32 +26,31 @@ package net.fabricmc.loom.test.unit.xcode
 
 import org.gradle.api.Project
 import org.gradle.api.model.ObjectFactory
-import org.gradle.api.provider.Property
 import spock.lang.Specification
 
 import net.fabricmc.loom.api.RunConfiguration
-import net.fabricmc.loom.task.tool.xcode.PbxprojFactory
+import net.fabricmc.loom.task.tool.xcode.XcschemeFactory
 import net.fabricmc.loom.test.util.GradleTestUtil
 
-class PbxprojFactoryTest extends Specification {
+class XcschemeFactoryTest extends Specification {
 	static Project project = GradleTestUtil.mockProject()
 	static ObjectFactory objectFactory = project.getObjects()
 
-	def "generates expected pbxproj output with no runs"() {
+	def "generates expected xcscheme output"() {
 		given:
-		def expected = PbxprojFactoryTest.getResourceAsStream("PbxprojFactoryTest.pbxproj").text
+		def expected = XcschemeFactoryTest.getResourceAsStream("XcschemeFactoryTest.xcscheme").text
 
-		expect:
-		new PbxprojFactory().generate("MyProject", []).serialize() == expected
-	}
-
-	def "generates expected pbxproj output with one run"() {
-		given:
-		def expected = PbxprojFactoryTest.getResourceAsStream("PbxprojFactoryTest_withRuns.pbxproj").text
 		def run = objectFactory.newInstance(RunConfiguration, "client")
-		run.displayName.set("Minecraft")
+		run.jvmArguments.set([
+			"-XstartOnFirstThread",
+			"-Xmx2G"
+		])
+		run.mainClass.set("com.example.Main")
+		run.programArguments.set(["--gameDir", "/run"])
+		run.environmentVars.set(["MY_VAR": "my_value"])
+		run.runDirectory.set(new File("/project/run"))
 
 		expect:
-		new PbxprojFactory().generate("MyProject", [run]).serialize() == expected
+		new XcschemeFactory().generate(run, new File("/usr/bin/java"), "@/tmp/classpath.txt") == expected
 	}
 }

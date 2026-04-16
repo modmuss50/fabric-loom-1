@@ -46,6 +46,7 @@ import net.fabricmc.loom.configuration.providers.minecraft.MinecraftVersionMeta;
 import net.fabricmc.loom.task.launch.GenerateDLIConfigTask;
 import net.fabricmc.loom.task.launch.GenerateLog4jConfigTask;
 import net.fabricmc.loom.task.launch.GenerateRemapClasspathTask;
+import net.fabricmc.loom.task.tool.xcode.GenerateXcodeProjectTask;
 import net.fabricmc.loom.util.Check;
 import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.LoomVersions;
@@ -172,6 +173,12 @@ public abstract class LoomTasks implements Runnable {
 
 		getTasks().register("vscode", GenVsCodeProjectTask.class, t -> {
 			t.setDescription("Generates VSCode launch configurations.");
+			t.dependsOn(getIDELaunchConfigureTaskName(getProject()));
+			t.setGroup(Constants.TaskGroup.IDE);
+		});
+
+		getTasks().register("xcode", GenerateXcodeProjectTask.class, t -> {
+			t.setDescription("Generates an Xcode project for this project.");
 			t.dependsOn(getIDELaunchConfigureTaskName(getProject()));
 			t.setGroup(Constants.TaskGroup.IDE);
 		});
