@@ -56,6 +56,7 @@ import net.fabricmc.loom.configuration.providers.minecraft.SignatureFixerApplyVi
 import net.fabricmc.loom.extension.LoomFiles;
 import net.fabricmc.loom.util.SidedClassVisitor;
 import net.fabricmc.loom.util.TinyRemapperHelper;
+import net.fabricmc.loom.util.ffm.CloneFile;
 import net.fabricmc.tinyremapper.OutputConsumerPath;
 import net.fabricmc.tinyremapper.TinyRemapper;
 
@@ -134,7 +135,9 @@ public abstract class AbstractMappedMinecraftProvider<M extends MinecraftProvide
 
 	protected void createBackupJars(List<MinecraftJar> minecraftJars) throws IOException {
 		for (MinecraftJar minecraftJar : minecraftJars) {
-			Files.copy(minecraftJar.getPath(), getBackupJarPath(minecraftJar), StandardCopyOption.REPLACE_EXISTING);
+			Path backupJarPath = getBackupJarPath(minecraftJar);
+			Files.deleteIfExists(backupJarPath);
+			CloneFile.clone(minecraftJar.getPath(), backupJarPath);
 		}
 	}
 

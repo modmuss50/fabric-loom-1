@@ -30,9 +30,10 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 
 import org.jspecify.annotations.Nullable;
+
+import net.fabricmc.loom.util.ffm.CloneFile;
 
 public record LocalMavenHelper(String group, String name, String version, @Nullable String baseClassifier, Path root, @Nullable String snapshotVersion) {
 	public LocalMavenHelper(String group, String name, String version, @Nullable String baseClassifier, Path root) {
@@ -46,7 +47,10 @@ public record LocalMavenHelper(String group, String name, String version, @Nulla
 
 		Files.createDirectories(getDirectory());
 		savePom();
-		return Files.copy(artifact, getOutputFile(classifier), StandardCopyOption.REPLACE_EXISTING);
+		Path outputFile = getOutputFile(classifier);
+		Files.deleteIfExists(outputFile);
+		CloneFile.clone(artifact, outputFile);
+		return outputFile;
 	}
 
 	public boolean exists(String classifier) {
