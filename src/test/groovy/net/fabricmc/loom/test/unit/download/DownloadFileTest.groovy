@@ -287,35 +287,49 @@ class DownloadFileTest extends DownloadTest {
 
 	def "Progress: File"() {
 		setup:
+		byte[] data = new byte[2 * 8192 + 37]
+		new Random(0).nextBytes(data)
 		server.get("/progressFile") {
-			it.result("Hello World")
+			it.header("Content-Length", data.length.toString())
+			it.result(data)
 		}
 
 		def output = new File(File.createTempDir(), "file.txt").toPath()
-		def started, ended = false
+		def started = 0
+		def ended = 0
+		def progress = []
 
 		when:
 		Download.create("$PATH/progressFile")
 				.progress(new DownloadProgressListener() {
 					@Override
 					void onStart() {
-						started = true
+						started++
 					}
 
 					@Override
 					void onProgress(long bytesTransferred, long contentLength) {
+						progress << [
+							bytesTransferred,
+							contentLength
+						]
 					}
 
 					@Override
 					void onEnd() {
-						ended = true
+						ended++
 					}
 				})
 				.downloadPath(output)
 
 		then:
-		started
-		ended
+		Files.readAllBytes(output) == data
+		started == 1
+		ended == 1
+		!progress.empty
+		progress.every { it[1] == data.length }
+		progress.collate(2, 1, false).every { it[0][0] < it[1][0] }
+		progress.last()[0] == data.length
 	}
 
 	def "Progress: String"() {
