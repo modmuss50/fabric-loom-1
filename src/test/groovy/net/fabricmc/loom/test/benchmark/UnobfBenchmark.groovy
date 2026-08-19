@@ -39,7 +39,7 @@ import net.fabricmc.loom.test.util.GradleProjectTestTrait
 class UnobfBenchmark implements GradleProjectTestTrait {
 	private static final String SENTINEL = ".loom-unobf-benchmark"
 	private static final int WARMUPS = 2
-	private static final int ITERATIONS = 5
+	private static final int ITERATIONS = 10
 	private static final int RESOURCE_SIZE = 8 * 1024 * 1024
 	private static int sourceVersion
 
@@ -78,15 +78,16 @@ public final class BenchmarkMod {
 		resource.bytes = resourceBytes
 
 		def scenarios = [
-			new Scenario("minecraft-provider-rebuild", ["help"], false, true, false),
-			new Scenario("loom-cache-rebuild", ["build", "--rerun-tasks"], false, true, false),
-			new Scenario("full-configuration", ["help"], false, false, false),
-			new Scenario("gen-sources-configuration", ["genSources", "--dry-run"], false, false, false),
-			new Scenario("configuration-cache-reuse", ["help"], false, false, true),
-			new Scenario("clean-build", ["clean", "build"], false, false, true),
-			new Scenario("no-op-build", ["build"], false, false, true),
-			new Scenario("source-change", ["build"], true, false, true),
-			new Scenario("launch-setup", ["configureClientLaunch"], false, false, true)
+			new Scenario("minecraft-provider-rebuild", ["help"], false, true, false, false),
+			new Scenario("loom-cache-rebuild", ["build", "--rerun-tasks"], false, true, false, false),
+			new Scenario("full-configuration", ["help"], false, false, false, false),
+			new Scenario("offline-configuration", ["help"], false, false, false, true),
+			new Scenario("gen-sources-configuration", ["genSources", "--dry-run"], false, false, false, false),
+			new Scenario("configuration-cache-reuse", ["help"], false, false, true, false),
+			new Scenario("clean-build", ["clean", "build"], false, false, true, false),
+			new Scenario("no-op-build", ["build"], false, false, true, false),
+			new Scenario("source-change", ["build"], true, false, true, false),
+			new Scenario("launch-setup", ["configureClientLaunch"], false, false, true, false)
 		]
 		def coldScenarios = scenarios.findAll { it.clearLoomCache }
 		def warmScenarios = scenarios.findAll { !it.clearLoomCache }
@@ -94,14 +95,14 @@ public final class BenchmarkMod {
 		// Populate shared caches before scenario-specific warmups so network time is not measured.
 		runScenario(gradle, scenarios.find { it.name == "clean-build" }, source, -1, false, dir, "cache-population")
 		WARMUPS.times { iteration ->
-			warmScenarios.each { scenario ->
+			orderedWarmScenarios(warmScenarios, iteration).each { scenario ->
 				runScenario(gradle, scenario, source, iteration, profile, dir, "warmup-${iteration}")
 			}
 		}
 
 		def results = []
 		ITERATIONS.times { iteration ->
-			warmScenarios.each { scenario ->
+			orderedWarmScenarios(warmScenarios, iteration).each { scenario ->
 				results << runScenario(gradle, scenario, source, iteration, profile, dir, "iteration-${iteration}")
 			}
 		}
@@ -135,7 +136,9 @@ fixtureResourceBytes=${RESOURCE_SIZE}
 
 		results.groupBy { it.scenario }.each { scenario, measurements ->
 			def durations = measurements.collect { it.durationMs }.sort()
-			println("${scenario}: median ${durations[durations.size().intdiv(2)]} ms (${durations.join(', ')} ms)")
+			def middle = durations.size().intdiv(2)
+			def median = durations.size() % 2 == 0 ? (durations[middle - 1] + durations[middle]) / 2 : durations[middle]
+			println("${scenario}: median ${median} ms (${durations.join(', ')} ms)")
 		}
 		println("Results: ${output.absolutePath}")
 	}
@@ -158,7 +161,12 @@ fixtureResourceBytes=${RESOURCE_SIZE}
 			source.text = source.text.replaceFirst(/ITERATION = \d+/, "ITERATION = ${++sourceVersion}")
 		}
 
-		def args = profile ? ["--profile"] : []
+		def args = scenario.offline ? ["--offline"] : []
+
+		if (profile) {
+			args << "--profile"
+		}
+
 		def reportDir = new File(gradle.projectDir, "build/reports/profile")
 
 		if (profile) {
@@ -224,6 +232,22 @@ fixtureResourceBytes=${RESOURCE_SIZE}
 		return iteration % 2 == 0 ? scenarios : scenarios.reverse()
 	}
 
+	private static List<Scenario> orderedWarmScenarios(List<Scenario> scenarios, int iteration) {
+		if (iteration % 2 == 0) {
+			return scenarios
+		}
+
+		def fullConfiguration = scenarios.find { it.name == "full-configuration" }
+		def offlineConfiguration = scenarios.find { it.name == "offline-configuration" }
+		return scenarios.collect { scenario ->
+			if (scenario == fullConfiguration) {
+				return offlineConfiguration
+			}
+
+			return scenario == offlineConfiguration ? fullConfiguration : scenario
+		}
+	}
+
 	private static void prepareBenchmarkDir(File dir) {
 		if (dir.exists() && !dir.isDirectory()) {
 			throw new IllegalArgumentException("Benchmark path is not a directory: ${dir}")
@@ -282,6 +306,7 @@ fixtureResourceBytes=${RESOURCE_SIZE}
 		boolean mutateSource
 		boolean clearLoomCache
 		boolean configurationCache
+		boolean offline
 	}
 
 	@Immutable
