@@ -92,9 +92,31 @@ class CachedFileStoreTest extends Specification {
 		store.prune()
 
 		then:
+		countRegularFiles() == 250
 		Files.exists(root.resolve("test_0"))
 		Files.exists(root.resolve("test_100"))
 		Files.notExists(root.resolve("test_300"))
+	}
+
+	def "pruneOnlyFilesOverLimit"() {
+		given:
+		def cacheRules = new CachedFileStoreImpl.CacheRules(100, Duration.ofDays(7))
+		def store = new CachedFileStoreImpl(root, BYTE_ARRAY_SERIALIZER, cacheRules)
+		def now = Instant.now()
+
+		when:
+		for (i in 0..<101) {
+			def key = "test_" + i
+			store.putEntry(key, "Hello world".bytes)
+			Files.setLastModifiedTime(root.resolve(key), FileTime.from(now.minusSeconds(i)))
+		}
+
+		store.prune()
+
+		then:
+		countRegularFiles() == 100
+		Files.exists(root.resolve("test_0"))
+		Files.notExists(root.resolve("test_100"))
 	}
 
 	def "pruneOldFiles"() {
@@ -116,6 +138,12 @@ class CachedFileStoreTest extends Specification {
 		Files.exists(root.resolve("test_0"))
 		Files.exists(root.resolve("test_100"))
 		Files.notExists(root.resolve("test_300"))
+	}
+
+	private long countRegularFiles() {
+		return Files.walk(root).withCloseable { walk ->
+			walk.filter { path -> Files.isRegularFile(path) }.count()
+		}
 	}
 
 	private static CachedFileStore.EntrySerializer<byte[]> BYTE_ARRAY_SERIALIZER = new CachedFileStore.EntrySerializer<byte[]>() {

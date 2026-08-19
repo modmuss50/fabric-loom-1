@@ -31,7 +31,6 @@ import java.nio.file.attribute.FileTime;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
@@ -70,10 +69,9 @@ public record CachedFileStoreImpl<T>(Path root, EntrySerializer<T> entrySerializ
 	}
 
 	public void prune() throws IOException {
-		// Sorted oldest -> newest
 		List<PathEntry> entries = new ArrayList<>();
 
-		// Iterate over all the files in the cache, and store them into the sorted list.
+		// Iterate over all the files in the cache.
 		try (Stream<Path> walk = Files.walk(root)) {
 			Iterator<Path> iterator = walk.iterator();
 
@@ -84,20 +82,22 @@ public record CachedFileStoreImpl<T>(Path root, EntrySerializer<T> entrySerializ
 					continue;
 				}
 
-				insertSorted(entries, new PathEntry(entry));
+				entries.add(new PathEntry(entry));
 			}
 		}
 
+		// Sort oldest -> newest
+		entries.sort(Comparator.comparing(PathEntry::lastModified));
+		Iterator<PathEntry> iterator = entries.iterator();
+
 		// Delete the oldest files to get under the max file limit
-		if (entries.size() > cacheRules.maxFiles) {
-			for (int i = 0; i < cacheRules.maxFiles; i++) {
-				PathEntry toRemove = entries.remove(0);
-				Files.delete(toRemove.path);
-			}
+		long excess = cacheRules.maxFiles < 0 ? 0 : Math.max(0, entries.size() - cacheRules.maxFiles);
+
+		for (long i = 0; i < excess; i++) {
+			Files.delete(iterator.next().path);
 		}
 
 		final Instant maxAge = Instant.now().minus(cacheRules().maxAge());
-		Iterator<PathEntry> iterator = entries.iterator();
 
 		while (iterator.hasNext()) {
 			final PathEntry entry = iterator.next();
@@ -109,19 +109,8 @@ public record CachedFileStoreImpl<T>(Path root, EntrySerializer<T> entrySerializ
 			}
 
 			// Remove all files over the max age
-			iterator.remove();
 			Files.delete(entry.path);
 		}
-	}
-
-	private void insertSorted(List<PathEntry> list, PathEntry entry) {
-		int index = Collections.binarySearch(list, entry, Comparator.comparing(PathEntry::lastModified));
-
-		if (index < 0) {
-			index = -index - 1;
-		}
-
-		list.add(index, entry);
 	}
 
 	/**
