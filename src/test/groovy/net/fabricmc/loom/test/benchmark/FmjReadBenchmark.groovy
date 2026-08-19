@@ -27,7 +27,6 @@ package net.fabricmc.loom.test.benchmark
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.security.MessageDigest
-import java.util.HexFormat
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -74,8 +73,9 @@ class FmjReadBenchmark {
 
 		def durations = []
 		List<String> expected
+		ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()
 
-		try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+		try {
 			expected = scan(jars, executor).signature
 			assert expected.every { !it.empty }
 			assert signatureHash(expected) == EXPECTED_SIGNATURE
@@ -91,6 +91,8 @@ class FmjReadBenchmark {
 				assert result.signature == expected
 				durations << new Measurement(iteration, duration, jars.size(), result.modCount)
 			}
+		} finally {
+			executor.close()
 		}
 
 		def output = new File(benchmarkDir, "fmj-results.csv")
@@ -138,7 +140,11 @@ jarCount=${jars.size()}
 	}
 
 	private static boolean loomDirty() {
-		def process = ["git", "status", "--porcelain"].execute()
+		def process = [
+			"git",
+			"status",
+			"--porcelain"
+		].execute()
 		return process.waitFor() != 0 || !process.text.trim().isEmpty()
 	}
 
