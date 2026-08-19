@@ -27,11 +27,13 @@ package net.fabricmc.loom.configuration.providers.minecraft.mapped;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import net.fabricmc.loom.configuration.ConfigContext;
 import net.fabricmc.loom.configuration.mods.dependency.LocalMavenHelper;
@@ -60,16 +62,14 @@ public abstract class ProcessedNamedMinecraftProvider<M extends MinecraftProvide
 	public List<MinecraftJar> provide(ProvideContext context) throws Exception {
 		final List<MinecraftJar> parentMinecraftJars = parentMinecraftProvider.getMinecraftJars();
 		final Map<MinecraftJar, MinecraftJar> minecraftJarOutputMap = parentMinecraftJars.stream()
-				.collect(Collectors.toMap(Function.identity(), this::getProcessedJar));
+				.collect(Collectors.toMap(Function.identity(), this::getProcessedJar, (first, second) -> {
+					throw new IllegalStateException("Duplicate Minecraft jar " + first);
+				}, LinkedHashMap::new));
 		final List<MinecraftJar> minecraftJars = List.copyOf(minecraftJarOutputMap.values());
 
 		parentMinecraftProvider.provide(context.withApplyDependencies(false));
 
-		boolean requiresProcessing = shouldRefreshOutputs(context) || parentMinecraftJars.stream()
-				.map(this::getProcessedPath)
-				.anyMatch(jarProcessorManager::requiresProcessingJar);
-
-		if (requiresProcessing) {
+		if (shouldRefreshOutputs(context)) {
 			processJars(minecraftJarOutputMap, context.configContext());
 			createBackupJars(minecraftJars);
 		}
@@ -78,7 +78,7 @@ public abstract class ProcessedNamedMinecraftProvider<M extends MinecraftProvide
 			applyDependencies();
 		}
 
-		return List.copyOf(minecraftJarOutputMap.values());
+		return minecraftJars;
 	}
 
 	@Override
@@ -135,9 +135,11 @@ public abstract class ProcessedNamedMinecraftProvider<M extends MinecraftProvide
 			return;
 		}
 
-		for (Path path : Files.list(parent).filter(Files::isRegularFile)
-				.filter(path -> path.getFileName().startsWith(jar.getFileName().toString().replace(".jar", ""))).toList()) {
-			Files.deleteIfExists(path);
+		try (Stream<Path> files = Files.list(parent)) {
+			for (Path path : files.filter(Files::isRegularFile)
+					.filter(path -> path.getFileName().startsWith(jar.getFileName().toString().replace(".jar", ""))).toList()) {
+				Files.deleteIfExists(path);
+			}
 		}
 	}
 

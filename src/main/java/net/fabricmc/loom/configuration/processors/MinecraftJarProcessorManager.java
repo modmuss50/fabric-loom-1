@@ -132,17 +132,6 @@ public final class MinecraftJarProcessorManager {
 		return sourceMappingsHash;
 	}
 
-	public boolean requiresProcessingJar(Path jar) {
-		Objects.requireNonNull(jar);
-
-		if (Files.notExists(jar)) {
-			LOGGER.debug("{} does not exist, generating", jar);
-			return true;
-		}
-
-		return false;
-	}
-
 	public void processJar(Path jar, ProcessorContext context) throws IOException {
 		for (ProcessorEntry<?> entry : jarProcessors) {
 			try {
