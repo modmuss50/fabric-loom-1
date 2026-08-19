@@ -81,6 +81,7 @@ public final class BenchmarkMod {
 			new Scenario("minecraft-provider-rebuild", ["help"], false, true, false),
 			new Scenario("loom-cache-rebuild", ["build", "--rerun-tasks"], false, true, false),
 			new Scenario("full-configuration", ["help"], false, false, false),
+			new Scenario("gen-sources-configuration", ["genSources", "--dry-run"], false, false, false),
 			new Scenario("configuration-cache-reuse", ["help"], false, false, true),
 			new Scenario("clean-build", ["clean", "build"], false, false, true),
 			new Scenario("no-op-build", ["build"], false, false, true),
