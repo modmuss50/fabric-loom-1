@@ -78,6 +78,7 @@ public final class BenchmarkMod {
 		resource.bytes = resourceBytes
 
 		def scenarios = [
+			new Scenario("minecraft-provider-rebuild", ["help"], false, true, false),
 			new Scenario("loom-cache-rebuild", ["build", "--rerun-tasks"], false, true, false),
 			new Scenario("full-configuration", ["help"], false, false, false),
 			new Scenario("configuration-cache-reuse", ["help"], false, false, true),
@@ -86,11 +87,11 @@ public final class BenchmarkMod {
 			new Scenario("source-change", ["build"], true, false, true),
 			new Scenario("launch-setup", ["configureClientLaunch"], false, false, true)
 		]
-		def coldScenario = scenarios.first()
-		def warmScenarios = scenarios.tail()
+		def coldScenarios = scenarios.findAll { it.clearLoomCache }
+		def warmScenarios = scenarios.findAll { !it.clearLoomCache }
 
 		// Populate shared caches before scenario-specific warmups so network time is not measured.
-		runScenario(gradle, scenarios[3], source, -1, false, dir, "cache-population")
+		runScenario(gradle, scenarios.find { it.name == "clean-build" }, source, -1, false, dir, "cache-population")
 		WARMUPS.times { iteration ->
 			warmScenarios.each { scenario ->
 				runScenario(gradle, scenario, source, iteration, profile, dir, "warmup-${iteration}")
@@ -104,16 +105,20 @@ public final class BenchmarkMod {
 			}
 		}
 		WARMUPS.times { iteration ->
-			runScenario(gradle, coldScenario, source, iteration, profile, dir, "warmup-${iteration}")
+			orderedColdScenarios(coldScenarios, iteration).each { scenario ->
+				runScenario(gradle, scenario, source, iteration, profile, dir, "warmup-${iteration}")
+			}
 		}
 		ITERATIONS.times { iteration ->
-			results << runScenario(gradle, coldScenario, source, iteration, profile, dir, "iteration-${iteration}")
+			orderedColdScenarios(coldScenarios, iteration).each { scenario ->
+				results << runScenario(gradle, scenario, source, iteration, profile, dir, "iteration-${iteration}")
+			}
 		}
 
 		def output = new File(dir, profile ? "results-profiled.csv" : "results.csv")
 		output.parentFile.mkdirs()
-		output.text = "scenario,iteration,duration_ms,configuration_cache_reused,task_outcomes\n" + results.collect {
-			"${it.scenario},${it.iteration},${it.durationMs},${it.configurationCacheReused},${it.taskOutcomes}"
+		output.text = "scenario,iteration,duration_ms,configuration_cache_reused,minecraft_cache_files,minecraft_cache_jars,minecraft_cache_backups,minecraft_cache_logical_bytes,minecraft_cache_allocated_kib,task_outcomes\n" + results.collect {
+			"${it.scenario},${it.iteration},${it.durationMs},${it.configurationCacheReused},${it.cache.files},${it.cache.jars},${it.cache.backups},${it.cache.logicalBytes},${it.cache.allocatedKiB},${it.taskOutcomes}"
 		}.join("\n") + "\n"
 		new File(dir, "environment.properties").text = """gradle=${GradleVersion.current().version}
 java=${System.getProperty('java.version')}
@@ -122,6 +127,7 @@ minecraft=26.1-snapshot-1
 fabricApi=0.140.3+26.1
 fabricLoader=${LoomTestVersions.FABRIC_LOADER.version()}
 loomRevision=${loomRevision()}
+loomDirty=${loomDirty()}
 profile=${profile}
 fixtureResourceBytes=${RESOURCE_SIZE}
 """
@@ -170,7 +176,51 @@ fixtureResourceBytes=${RESOURCE_SIZE}
 
 		def taskOutcomes = result.tasks.collect { "${it.path}=${it.outcome}" }.join(";")
 		def configurationCacheReused = result.output.contains("Reusing configuration cache.")
-		return new Measurement(scenario.name, iteration, durationMs, configurationCacheReused, taskOutcomes)
+		def cache = measureMinecraftCache(gradle)
+		return new Measurement(scenario.name, iteration, durationMs, configurationCacheReused, cache, taskOutcomes)
+	}
+
+	private static CacheMeasurement measureMinecraftCache(GradleProject gradle) {
+		def roots = [
+			new File(gradle.projectDir, ".gradle/loom-cache/minecraftMaven"),
+			new File(gradle.gradleHomeDir, "caches/fabric-loom/minecraftMaven")
+		]
+		def files = []
+		roots.findAll { it.isDirectory() }.each { root ->
+			root.traverse(type: groovy.io.FileType.FILES) { files << it }
+		}
+		def allocations = roots.findAll { it.exists() }.collect { allocatedSizeKiB(it) }
+		def allocatedKiB = allocations.any { it < 0 } ? -1L : (allocations.sum() ?: 0L)
+
+		return new CacheMeasurement(
+				files.size(),
+				files.count { it.name.endsWith(".jar") },
+				files.count { it.name.endsWith(".jar.backup") },
+				files.sum { it.length() } ?: 0L,
+				allocatedKiB
+				)
+	}
+
+	private static long allocatedSizeKiB(File directory) {
+		try {
+			def process = [
+				"du",
+				"-sk",
+				directory.absolutePath
+			].execute()
+			if (process.waitFor() != 0) {
+				return -1L
+			}
+
+			def output = process.text.trim()
+			return output ==~ /\d+\s+.*/ ? output.split(/\s+/)[0].toLong() : -1L
+		} catch (IOException | NumberFormatException ignored) {
+			return -1L
+		}
+	}
+
+	private static List<Scenario> orderedColdScenarios(List<Scenario> scenarios, int iteration) {
+		return iteration % 2 == 0 ? scenarios : scenarios.reverse()
 	}
 
 	private static void prepareBenchmarkDir(File dir) {
@@ -215,6 +265,15 @@ fixtureResourceBytes=${RESOURCE_SIZE}
 		return process.waitFor() == 0 ? process.text.trim() : "unknown"
 	}
 
+	private static boolean loomDirty() {
+		def process = [
+			"git",
+			"status",
+			"--porcelain"
+		].execute()
+		return process.waitFor() != 0 || !process.text.trim().isEmpty()
+	}
+
 	@Immutable
 	private static class Scenario {
 		String name
@@ -230,6 +289,16 @@ fixtureResourceBytes=${RESOURCE_SIZE}
 		int iteration
 		long durationMs
 		boolean configurationCacheReused
+		CacheMeasurement cache
 		String taskOutcomes
+	}
+
+	@Immutable
+	private static class CacheMeasurement {
+		int files
+		int jars
+		int backups
+		long logicalBytes
+		long allocatedKiB
 	}
 }
