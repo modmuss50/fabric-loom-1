@@ -107,7 +107,7 @@ public abstract class AbstractMappedMinecraftProvider<M extends MinecraftProvide
 		if (shouldRefreshOutputs(context)) {
 			try {
 				remapInputs(remappedJars, context.configContext());
-				createBackupJars(minecraftJars);
+				prepareBackupJars(minecraftJars, context);
 			} catch (Throwable t) {
 				cleanOutputs(remappedJars);
 
@@ -135,6 +135,11 @@ public abstract class AbstractMappedMinecraftProvider<M extends MinecraftProvide
 		return outputJarPath.resolveSibling(outputJarPath.getFileName() + ".backup");
 	}
 
+	private static Path getBackupNotRequiredMarkerPath(MinecraftJar minecraftJar) {
+		final Path backupPath = getBackupJarPath(minecraftJar);
+		return backupPath.resolveSibling(backupPath.getFileName() + ".not-required");
+	}
+
 	protected boolean requiresBackupJars() {
 		return true;
 	}
@@ -146,12 +151,37 @@ public abstract class AbstractMappedMinecraftProvider<M extends MinecraftProvide
 
 		for (MinecraftJar minecraftJar : minecraftJars) {
 			Files.copy(minecraftJar.getPath(), getBackupJarPath(minecraftJar), StandardCopyOption.REPLACE_EXISTING);
+			Files.deleteIfExists(getBackupNotRequiredMarkerPath(minecraftJar));
 		}
 	}
 
-	public record ProvideContext(boolean applyDependencies, boolean refreshOutputs, ConfigContext configContext) {
+	protected void prepareBackupJars(List<MinecraftJar> minecraftJars, ProvideContext context) throws IOException {
+		if (!requiresBackupJars()) {
+			return;
+		}
+
+		if (context.createBackupJars()) {
+			createBackupJars(minecraftJars);
+			return;
+		}
+
+		for (MinecraftJar minecraftJar : minecraftJars) {
+			Files.deleteIfExists(getBackupJarPath(minecraftJar));
+			Files.write(getBackupNotRequiredMarkerPath(minecraftJar), new byte[0]);
+		}
+	}
+
+	public record ProvideContext(boolean applyDependencies, boolean refreshOutputs, boolean createBackupJars, ConfigContext configContext) {
+		public ProvideContext(boolean applyDependencies, boolean refreshOutputs, ConfigContext configContext) {
+			this(applyDependencies, refreshOutputs, true, configContext);
+		}
+
 		ProvideContext withApplyDependencies(boolean applyDependencies) {
-			return new ProvideContext(applyDependencies, refreshOutputs(), configContext());
+			return new ProvideContext(applyDependencies, refreshOutputs(), createBackupJars(), configContext());
+		}
+
+		ProvideContext withCreateBackupJars(boolean createBackupJars) {
+			return new ProvideContext(applyDependencies(), refreshOutputs(), createBackupJars, configContext());
 		}
 	}
 
@@ -245,7 +275,11 @@ public abstract class AbstractMappedMinecraftProvider<M extends MinecraftProvide
 
 		if (requiresBackupJars()) {
 			for (OutputJar outputJar : outputJars) {
-				if (!Files.exists(getBackupJarPath(outputJar.outputJar()))) {
+				final MinecraftJar minecraftJar = outputJar.outputJar();
+				final boolean hasRequiredBackup = Files.exists(getBackupJarPath(minecraftJar));
+				final boolean hasBackupNotRequiredMarker = !context.createBackupJars() && Files.exists(getBackupNotRequiredMarkerPath(minecraftJar));
+
+				if (!hasRequiredBackup && !hasBackupNotRequiredMarker) {
 					LOGGER.info("Refreshing outputs for mapped jar, as backup jar does not exist for {}", outputJar.outputJar());
 					return true;
 				}
@@ -354,6 +388,7 @@ public abstract class AbstractMappedMinecraftProvider<M extends MinecraftProvide
 		for (RemappedJars remappedJar : remappedJars) {
 			Files.deleteIfExists(remappedJar.outputJarPath());
 			Files.deleteIfExists(getBackupJarPath(remappedJar.outputJar()));
+			Files.deleteIfExists(getBackupNotRequiredMarkerPath(remappedJar.outputJar()));
 		}
 	}
 

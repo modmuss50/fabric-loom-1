@@ -27,6 +27,7 @@ package net.fabricmc.loom.configuration.providers.minecraft.mapped;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -67,11 +68,17 @@ public abstract class ProcessedNamedMinecraftProvider<M extends MinecraftProvide
 				}, LinkedHashMap::new));
 		final List<MinecraftJar> minecraftJars = List.copyOf(minecraftJarOutputMap.values());
 
-		parentMinecraftProvider.provide(context.withApplyDependencies(false));
+		ProvideContext parentContext = context.withApplyDependencies(false);
+
+		if (extension.disableObfuscation()) {
+			parentContext = parentContext.withCreateBackupJars(false);
+		}
+
+		parentMinecraftProvider.provide(parentContext);
 
 		if (shouldRefreshOutputs(context)) {
 			processJars(minecraftJarOutputMap, context.configContext());
-			createBackupJars(minecraftJars);
+			prepareBackupJars(minecraftJars, context);
 		}
 
 		if (context.applyDependencies()) {
@@ -101,12 +108,24 @@ public abstract class ProcessedNamedMinecraftProvider<M extends MinecraftProvide
 			deleteSimilarJars(outputJar.getPath());
 
 			final LocalMavenHelper mavenHelper = getMavenHelper(minecraftJar.getType());
-			final Path outputPath = mavenHelper.copyToMaven(minecraftJar.getPath(), null);
+			final Path outputPath = mavenHelper.getOutputFile(null);
+			Files.createDirectories(outputPath.getParent());
+			mavenHelper.savePom();
+			Files.copy(getProcessingInput(minecraftJar), outputPath, StandardCopyOption.REPLACE_EXISTING);
 
 			assert outputJar.getPath().equals(outputPath);
 
 			jarProcessorManager.processJar(outputPath, new ProcessorContextImpl(configContext, minecraftJar));
 		}
+	}
+
+	private Path getProcessingInput(MinecraftJar minecraftJar) {
+		if (!extension.disableObfuscation()) {
+			return minecraftJar.getPath();
+		}
+
+		final Path backupPath = getBackupJarPath(minecraftJar);
+		return Files.exists(backupPath) ? backupPath : minecraftJar.getPath();
 	}
 
 	@Override

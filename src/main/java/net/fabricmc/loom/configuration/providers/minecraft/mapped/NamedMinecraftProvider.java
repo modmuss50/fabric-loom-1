@@ -105,7 +105,7 @@ public abstract class NamedMinecraftProvider<M extends MinecraftProvider> extend
 							getMergedJar().toFile()
 				);
 
-				createBackupJars(minecraftJars);
+				prepareBackupJars(minecraftJars, context);
 			}
 
 			getMavenHelper(MinecraftJar.Type.MERGED).savePom();
