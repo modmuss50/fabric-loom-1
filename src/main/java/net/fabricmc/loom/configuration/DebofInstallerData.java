@@ -26,6 +26,8 @@ package net.fabricmc.loom.configuration;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -36,7 +38,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import net.fabricmc.loom.configuration.processors.speccontext.DebofConfiguration;
-import net.fabricmc.loom.util.ZipUtils;
+import net.fabricmc.loom.util.FileSystemUtil;
 import net.fabricmc.loom.util.fmj.FabricModJson;
 import net.fabricmc.loom.util.fmj.FabricModJsonFactory;
 
@@ -65,14 +67,17 @@ public class DebofInstallerData {
 
 	@Nullable
 	private static InstallerData getInstaller(File file) {
-		try {
-			byte[] installerData = ZipUtils.unpackNullable(file.toPath(), InstallerData.INSTALLER_PATH);
+		final Path path = file.toPath();
 
-			if (installerData == null) {
+		try (FileSystemUtil.Delegate fs = FileSystemUtil.getJarFileSystem(path)) {
+			Path installerPath = fs.getPath(InstallerData.INSTALLER_PATH);
+
+			if (Files.notExists(installerPath)) {
 				return null;
 			}
 
-			FabricModJson fabricModJson = FabricModJsonFactory.createFromZip(file.toPath());
+			byte[] installerData = Files.readAllBytes(installerPath);
+			FabricModJson fabricModJson = FabricModJsonFactory.createFromZip(fs, path);
 			LOGGER.info("Found installer in mod {} version {}", fabricModJson.getId(), fabricModJson.getModVersion());
 			return InstallerData.fromBytes(installerData, fabricModJson.getModVersion());
 		} catch (IOException e) {

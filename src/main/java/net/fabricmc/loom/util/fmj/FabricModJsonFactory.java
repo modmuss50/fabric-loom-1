@@ -29,6 +29,7 @@ import static net.fabricmc.loom.util.fmj.FabricModJsonUtils.readInt;
 import java.io.File;
 import java.io.IOException;
 import java.io.Reader;
+import java.io.StringReader;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -75,8 +76,17 @@ public final class FabricModJsonFactory {
 	}
 
 	public static FabricModJson createFromZip(Path zipPath) {
+		try (FileSystemUtil.Delegate fs = FileSystemUtil.getJarFileSystem(zipPath)) {
+			return createFromZip(fs, zipPath);
+		} catch (IOException e) {
+			throw new UncheckedIOException("Failed to read fabric.mod.json file in zip: " + zipPath, e);
+		}
+	}
+
+	public static FabricModJson createFromZip(FileSystemUtil.Delegate fs, Path zipPath) {
 		try {
-			return create(ZipUtils.unpackGson(zipPath, FABRIC_MOD_JSON, JsonObject.class), new FabricModJsonSource.ZipSource(zipPath));
+			JsonObject jsonObject = LoomGradlePlugin.GSON.fromJson(new StringReader(fs.readString(FABRIC_MOD_JSON)), JsonObject.class);
+			return create(jsonObject, new FabricModJsonSource.ZipSource(zipPath));
 		} catch (IOException e) {
 			throw new UncheckedIOException("Failed to read fabric.mod.json file in zip: " + zipPath, e);
 		} catch (JsonSyntaxException e) {
