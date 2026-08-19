@@ -275,6 +275,21 @@ test {
 	}
 }
 
+tasks.register('unobfBenchmark', JavaExec) {
+	group = 'verification'
+	description = 'Benchmarks the Minecraft 26.1+ unobfuscated development lifecycle'
+	dependsOn(testClasses)
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'net.fabricmc.loom.test.benchmark.UnobfBenchmark'
+	args providers.gradleProperty('benchmarkDir')
+			.orElse(layout.buildDirectory.dir('benchmark/unobf-v2').map { it.asFile.absolutePath })
+			.get()
+
+	if (providers.gradleProperty('benchmarkProfile').map { it.toBoolean() }.orElse(false).get()) {
+		args '--profile'
+	}
+}
+
 // Workaround https://github.com/gradle/gradle/issues/25898
 tasks.withType(Test).configureEach {
 	jvmArgs = [
