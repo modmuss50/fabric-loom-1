@@ -24,29 +24,24 @@
 
 package net.fabricmc.loom.task;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.IOException;
 import java.io.Serializable;
-import java.io.UncheckedIOException;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.jar.Manifest;
 
 import org.gradle.api.Action;
 import org.gradle.api.Task;
+import org.gradle.api.java.archives.Manifest;
+import org.gradle.api.java.archives.internal.DefaultManifest;
 import org.gradle.api.provider.Provider;
 import org.gradle.jvm.tasks.Jar;
 
 import net.fabricmc.loom.task.service.JarManifestService;
 import net.fabricmc.loom.util.Constants;
-import net.fabricmc.loom.util.ZipReprocessorUtil;
 
 /**
- * Action that modifies the manifest of a jar file to add Loom metadata.
- * Configuration-cache-compatible implementation using providers.
+ * Adds Loom metadata to the effective Gradle manifest immediately before the jar is created.
  */
 public class ManifestModificationAction implements Action<Task>, Serializable {
 	private final Provider<JarManifestService> manifestService;
@@ -68,16 +63,30 @@ public class ManifestModificationAction implements Action<Task>, Serializable {
 	@Override
 	public void execute(Task t) {
 		final Jar jarTask = (Jar) t;
-		final File jarFile = jarTask.getArchiveFile().get().getAsFile();
+		final Manifest manifest = jarTask.getManifest();
+		final Manifest effectiveManifest = manifest.getEffectiveManifest();
+		final Map<String, Object> attributes = new LinkedHashMap<>(effectiveManifest.getAttributes());
+		final Map<String, Map<String, Object>> sections = new LinkedHashMap<>();
 
-		try {
-			modifyManifest(jarFile);
-		} catch (IOException e) {
-			throw new UncheckedIOException("Failed to modify jar manifest for " + jarFile.getName(), e);
+		effectiveManifest.getSections().forEach((name, values) -> sections.put(name, new LinkedHashMap<>(values)));
+
+		// The Jar task may have cached this manifest while snapshotting its inputs. Mutate that
+		// instance and remove its now-materialized merge sources rather than replacing it.
+		if (manifest instanceof DefaultManifest defaultManifest) {
+			defaultManifest.clear();
+		} else {
+			manifest.getAttributes().clear();
+			manifest.getSections().clear();
 		}
+
+		manifest.attributes(attributes);
+		sections.forEach((name, values) -> manifest.attributes(values, name));
+
+		final boolean hasMixinVersion = attributes.containsKey(Constants.Manifest.MIXIN_VERSION);
+		manifest.attributes(manifestService.get().createAttributes(getManifestAttributes(), hasMixinVersion));
 	}
 
-	private void modifyManifest(File jarFile) throws IOException {
+	private Map<String, String> getManifestAttributes() {
 		Map<String, String> manifestAttributes = new HashMap<>();
 
 		// Set the mapping namespace to "official" for non-remapped jars
@@ -89,19 +98,14 @@ public class ManifestModificationAction implements Action<Task>, Serializable {
 		}
 
 		// Add client-only entries list if present
-		if (clientOnlyEntries != null && !clientOnlyEntries.get().isEmpty()) {
-			manifestAttributes.put(Constants.Manifest.CLIENT_ENTRIES, String.join(";", clientOnlyEntries.get()));
+		if (clientOnlyEntries != null) {
+			List<String> entries = clientOnlyEntries.get();
+
+			if (!entries.isEmpty()) {
+				manifestAttributes.put(Constants.Manifest.CLIENT_ENTRIES, String.join(";", entries));
+			}
 		}
 
-		ZipReprocessorUtil.transformZipEntry(jarFile.toPath(), Constants.Manifest.PATH, bytes -> {
-			var manifest = new Manifest(new ByteArrayInputStream(bytes));
-
-			// Apply standard Loom manifest attributes (Gradle version, Loom version, etc.)
-			manifestService.get().apply(manifest, manifestAttributes);
-
-			ByteArrayOutputStream out = new ByteArrayOutputStream();
-			manifest.write(out);
-			return out.toByteArray();
-		});
+		return manifestAttributes;
 	}
 }

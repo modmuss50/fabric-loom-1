@@ -61,7 +61,7 @@ public class NonRemappedJarTaskConfiguration {
 		final Provider<JarManifestService> manifestServiceProvider = JarManifestService.get(project);
 
 		project.getTasks().named(JavaPlugin.JAR_TASK_NAME, Jar.class).configure(task -> {
-			task.doLast(new ManifestModificationAction(
+			task.doFirst(new ManifestModificationAction(
 					manifestServiceProvider,
 					"official",
 					project.provider(extension::areEnvironmentSourceSetsSplit),

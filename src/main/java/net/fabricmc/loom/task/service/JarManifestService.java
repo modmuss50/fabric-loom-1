@@ -25,6 +25,7 @@
 package net.fabricmc.loom.task.service;
 
 import java.io.Serializable;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.jar.Attributes;
@@ -75,32 +76,38 @@ public abstract class JarManifestService implements BuildService<JarManifestServ
 
 	public void apply(Manifest manifest, Map<String, String> extraValues) {
 		Attributes attributes = manifest.getMainAttributes();
+		createAttributes(extraValues, attributes.containsKey(Constants.Manifest.MIXIN_VERSION))
+				.forEach(attributes::putValue);
+	}
+
+	public Map<String, String> createAttributes(Map<String, String> extraValues, boolean hasMixinVersion) {
+		Map<String, String> attributes = new LinkedHashMap<>();
 
 		extraValues.entrySet().stream()
 				.sorted(Map.Entry.comparingByKey())
-				.forEach(entry -> {
-					attributes.putValue(entry.getKey(), entry.getValue());
-				});
+				.forEach(entry -> attributes.put(entry.getKey(), entry.getValue()));
 
 		// Don't set version attributes when running the reproducible build tests as it will break them when anything updates
 		if (Boolean.getBoolean("loom.test.reproducible")) {
-			return;
+			return attributes;
 		}
 
 		Params p = getParameters();
 
-		attributes.putValue(Constants.Manifest.GRADLE_VERSION, p.getGradleVersion().get());
-		attributes.putValue(Constants.Manifest.LOOM_VERSION, p.getLoomVersion().get());
-		attributes.putValue(Constants.Manifest.MIXIN_COMPILE_EXTENSIONS_VERSION, p.getMCEVersion().get());
-		attributes.putValue(Constants.Manifest.MINECRAFT_VERSION, p.getMinecraftVersion().get());
-		attributes.putValue(Constants.Manifest.TINY_REMAPPER_VERSION, p.getTinyRemapperVersion().get());
-		attributes.putValue(Constants.Manifest.FABRIC_LOADER_VERSION, p.getFabricLoaderVersion().get());
+		attributes.put(Constants.Manifest.GRADLE_VERSION, p.getGradleVersion().get());
+		attributes.put(Constants.Manifest.LOOM_VERSION, p.getLoomVersion().get());
+		attributes.put(Constants.Manifest.MIXIN_COMPILE_EXTENSIONS_VERSION, p.getMCEVersion().get());
+		attributes.put(Constants.Manifest.MINECRAFT_VERSION, p.getMinecraftVersion().get());
+		attributes.put(Constants.Manifest.TINY_REMAPPER_VERSION, p.getTinyRemapperVersion().get());
+		attributes.put(Constants.Manifest.FABRIC_LOADER_VERSION, p.getFabricLoaderVersion().get());
 
 		// This can be overridden by mods if required
-		if (!attributes.containsKey(Constants.Manifest.MIXIN_VERSION)) {
-			attributes.putValue(Constants.Manifest.MIXIN_VERSION, p.getMixinVersion().get().version());
-			attributes.putValue(Constants.Manifest.MIXIN_GROUP, p.getMixinVersion().get().group());
+		if (!hasMixinVersion) {
+			attributes.put(Constants.Manifest.MIXIN_VERSION, p.getMixinVersion().get().version());
+			attributes.put(Constants.Manifest.MIXIN_GROUP, p.getMixinVersion().get().group());
 		}
+
+		return attributes;
 	}
 
 	// Must be public for configuration cache

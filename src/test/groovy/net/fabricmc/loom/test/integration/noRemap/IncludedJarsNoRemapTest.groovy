@@ -39,6 +39,25 @@ class IncludedJarsNoRemapTest extends Specification implements GradleProjectTest
 	def "included jars without remapping (gradle #version)"() {
 		setup:
 		def gradle = gradleProject(project: "includedJarsNoRemap", version: version)
+		new File(gradle.projectDir, "custom-manifest.mf").text = '''Manifest-Version: 1.0
+Imported-Attribute: preserved
+Fabric-Mapping-Namespace: invalid
+Fabric-Mixin-Version: custom-version
+Fabric-Mixin-Group: custom-group
+
+Name: test/section
+Section-Attribute: preserved
+
+'''
+		gradle.buildGradle << '''
+			jar {
+				manifest {
+					attributes 'Test-Attribute': 'preserved',
+							'Provider-Attribute': providers.provider { 'provided' }
+					from 'custom-manifest.mf'
+				}
+			}
+			'''
 
 		when:
 		def result = gradle.run(tasks: ["jar"])
@@ -67,6 +86,12 @@ class IncludedJarsNoRemapTest extends Specification implements GradleProjectTest
 		attributes.getValue("Fabric-Loom-Version") != null
 		attributes.getValue("Fabric-Minecraft-Version") != null
 		attributes.getValue("Fabric-Tiny-Remapper-Version") != null
+		attributes.getValue("Test-Attribute") == "preserved"
+		attributes.getValue("Provider-Attribute") == "provided"
+		attributes.getValue("Imported-Attribute") == "preserved"
+		attributes.getValue("Fabric-Mixin-Version") == "custom-version"
+		attributes.getValue("Fabric-Mixin-Group") == "custom-group"
+		manifest.getAttributes("test/section").getValue("Section-Attribute") == "preserved"
 
 		where:
 		version << STANDARD_TEST_VERSIONS
