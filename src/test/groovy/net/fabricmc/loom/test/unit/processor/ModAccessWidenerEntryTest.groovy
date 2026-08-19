@@ -26,8 +26,10 @@ package net.fabricmc.loom.test.unit.processor
 
 import spock.lang.Specification
 
+import net.fabricmc.classtweaker.api.visitor.ClassTweakerVisitor
 import net.fabricmc.loom.configuration.accesswidener.ModAccessWidenerEntry
 import net.fabricmc.loom.util.fmj.FabricModJson
+import net.fabricmc.loom.util.fmj.FabricModJsonSource
 import net.fabricmc.loom.util.fmj.ModEnvironment
 
 class ModAccessWidenerEntryTest extends Specification {
@@ -46,5 +48,22 @@ class ModAccessWidenerEntryTest extends Specification {
 		entry.environment() == ModEnvironment.UNIVERSAL
 		entry.transitiveOnly()
 		entry.hashCode() == -1218981396
+	}
+
+	def "caches access widener contents"() {
+		given:
+		def source = Mock(FabricModJsonSource)
+		def mod = Mock(FabricModJson.Mockable)
+		mod.getSource() >> source
+		def entry = new ModAccessWidenerEntry(mod, "test.accesswidener", ModEnvironment.UNIVERSAL, true)
+		def visitor = Mock(ClassTweakerVisitor)
+		def contents = "accessWidener v2 official\naccessible class com/example/Test\n".bytes
+
+		when:
+		entry.readOfficial(visitor)
+		entry.readOfficial(visitor)
+
+		then:
+		1 * source.read("test.accesswidener") >> contents
 	}
 }

@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import org.jspecify.annotations.Nullable;
 
@@ -45,7 +46,37 @@ import net.fabricmc.tinyremapper.TinyRemapper;
 /**
  * {@link AccessWidenerEntry} implementation for a {@link FabricModJson}.
  */
-public record ModAccessWidenerEntry(FabricModJson mod, String path, ModEnvironment environment, boolean transitiveOnly) implements AccessWidenerEntry {
+public final class ModAccessWidenerEntry implements AccessWidenerEntry {
+	private final FabricModJson mod;
+	private final String path;
+	private final ModEnvironment environment;
+	private final boolean transitiveOnly;
+	private volatile byte @Nullable [] raw;
+
+	public ModAccessWidenerEntry(FabricModJson mod, String path, ModEnvironment environment, boolean transitiveOnly) {
+		this.mod = mod;
+		this.path = path;
+		this.environment = environment;
+		this.transitiveOnly = transitiveOnly;
+	}
+
+	public FabricModJson mod() {
+		return mod;
+	}
+
+	public String path() {
+		return path;
+	}
+
+	@Override
+	public ModEnvironment environment() {
+		return environment;
+	}
+
+	public boolean transitiveOnly() {
+		return transitiveOnly;
+	}
+
 	public static List<ModAccessWidenerEntry> readAll(FabricModJson modJson, boolean transitiveOnly) {
 		var entries = new ArrayList<ModAccessWidenerEntry>();
 
@@ -113,6 +144,49 @@ public record ModAccessWidenerEntry(FabricModJson mod, String path, ModEnvironme
 	}
 
 	private byte[] readRaw() throws IOException {
-		return mod.getSource().read(path);
+		byte[] data = raw;
+
+		if (data == null) {
+			synchronized (this) {
+				data = raw;
+
+				if (data == null) {
+					data = mod.getSource().read(path);
+					raw = data;
+				}
+			}
+		}
+
+		return data;
+	}
+
+	@Override
+	public boolean equals(Object obj) {
+		if (this == obj) {
+			return true;
+		}
+
+		if (!(obj instanceof ModAccessWidenerEntry other)) {
+			return false;
+		}
+
+		return transitiveOnly == other.transitiveOnly
+				&& Objects.equals(mod, other.mod)
+				&& Objects.equals(path, other.path)
+				&& Objects.equals(environment, other.environment);
+	}
+
+	@Override
+	public int hashCode() {
+		int result = Objects.hashCode(mod);
+		result = 31 * result + Objects.hashCode(path);
+		result = 31 * result + Objects.hashCode(environment);
+		return 31 * result + Boolean.hashCode(transitiveOnly);
+	}
+
+	@Override
+	public String toString() {
+		return "ModAccessWidenerEntry[mod=%s, path=%s, environment=%s, transitiveOnly=%s]"
+				.formatted(mod, path, environment, transitiveOnly);
 	}
 }
