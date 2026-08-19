@@ -40,6 +40,7 @@ class UnobfBenchmark implements GradleProjectTestTrait {
 	private static final String SENTINEL = ".loom-unobf-benchmark"
 	private static final int WARMUPS = 2
 	private static final int ITERATIONS = 5
+	private static final int RESOURCE_SIZE = 8 * 1024 * 1024
 	private static int sourceVersion
 
 	def run(File dir, boolean profile) {
@@ -70,6 +71,11 @@ public final class BenchmarkMod {
 	}
 }
 '''
+		def resource = new File(gradle.projectDir, "src/main/resources/benchmark.bin")
+		resource.parentFile.mkdirs()
+		def resourceBytes = new byte[RESOURCE_SIZE]
+		new Random(0).nextBytes(resourceBytes)
+		resource.bytes = resourceBytes
 
 		def scenarios = [
 			new Scenario("loom-cache-rebuild", ["build", "--rerun-tasks"], false, true, false),
@@ -117,6 +123,7 @@ fabricApi=0.140.3+26.1
 fabricLoader=${LoomTestVersions.FABRIC_LOADER.version()}
 loomRevision=${loomRevision()}
 profile=${profile}
+fixtureResourceBytes=${RESOURCE_SIZE}
 """
 
 		results.groupBy { it.scenario }.each { scenario, measurements ->
