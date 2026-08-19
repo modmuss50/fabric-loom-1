@@ -43,6 +43,9 @@ class MinecraftJarProcessorManagerTest extends Specification {
 		then:
 		manager1.jarHash == manager2.jarHash
 		manager1.jarHash == "eb6faafa72"
+		manager1.sourceMappingsHash == manager2.sourceMappingsHash
+		manager1.jarHash == manager1.sourceMappingsHash.substring(0, 10)
+		manager1.sourceMappingsHash.length() == 40
 	}
 
 	def "Cache value does not match"() {

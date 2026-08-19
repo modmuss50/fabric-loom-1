@@ -54,9 +54,13 @@ public final class MinecraftJarProcessorManager {
 	private static final Logger LOGGER = LoggerFactory.getLogger(MinecraftJarProcessorManager.class);
 
 	private final List<ProcessorEntry<?>> jarProcessors;
+	private final String jarHash;
+	private final String sourceMappingsHash;
 
 	private MinecraftJarProcessorManager(List<ProcessorEntry<?>> jarProcessors) {
 		this.jarProcessors = Collections.unmodifiableList(jarProcessors);
+		this.sourceMappingsHash = Checksum.of(getCacheValue()).sha1().hex();
+		this.jarHash = sourceMappingsHash.substring(0, 10);
 	}
 
 	@Nullable
@@ -121,12 +125,11 @@ public final class MinecraftJarProcessorManager {
 	}
 
 	public String getJarHash() {
-		//fabric-loom:mod-javadoc:-1289977000
-		return Checksum.of(getCacheValue()).sha1().hex(10);
+		return jarHash;
 	}
 
 	public String getSourceMappingsHash() {
-		return Checksum.of(getCacheValue()).sha1().hex();
+		return sourceMappingsHash;
 	}
 
 	public boolean requiresProcessingJar(Path jar) {
