@@ -47,19 +47,22 @@ import net.fabricmc.mappingio.tree.MemoryMappingTree;
 
 public final class NoRemapMappingConfiguration extends MappingConfiguration {
 	private static final Logger LOGGER = LoggerFactory.getLogger(NoRemapMappingConfiguration.class);
+	private final String mappingsHash;
 
-	private NoRemapMappingConfiguration(String mappingsIdentifier, Path inputJar) {
+	private NoRemapMappingConfiguration(String mappingsIdentifier, Path inputJar, String mappingsHash) {
 		super(mappingsIdentifier, inputJar);
+		this.mappingsHash = mappingsHash;
 	}
 
 	public static NoRemapMappingConfiguration create(Project project, DependencyInfo dependency, MinecraftProvider minecraftProvider) {
 		final String version = dependency.getResolvedVersion();
 		final Path inputJar = resolveInputJar(dependency, "annotations");
 		final String[] dependencyParts = dependency.getDepString().split(":");
-		final String mappingsName = "annotations.%s.%s.%s".formatted(dependencyParts[0], dependencyParts[1], Checksum.of(inputJar).sha256().hex(12));
+		final String mappingsHash = Checksum.of(inputJar).sha256().hex();
+		final String mappingsName = "annotations.%s.%s.%s".formatted(dependencyParts[0], dependencyParts[1], mappingsHash.substring(0, 12));
 		final TinyJarInfo jarInfo = readJarInfo(inputJar, dependency, minecraftProvider, "annotations");
 		final String mappingsIdentifier = createMappingsIdentifier(mappingsName, version, getMappingsClassifier(dependency, jarInfo.v2()), minecraftProvider.minecraftVersion());
-		var mappingConfiguration = new NoRemapMappingConfiguration(mappingsIdentifier, inputJar);
+		var mappingConfiguration = new NoRemapMappingConfiguration(mappingsIdentifier, inputJar, mappingsHash);
 		mappingConfiguration.setup(project, minecraftProvider, dependency, "annotations");
 		return mappingConfiguration;
 	}
@@ -115,7 +118,7 @@ public final class NoRemapMappingConfiguration extends MappingConfiguration {
 
 	@Override
 	public String getMappingsHash() {
-		return Checksum.of(inputJar()).sha256().hex();
+		return mappingsHash;
 	}
 
 	@Override

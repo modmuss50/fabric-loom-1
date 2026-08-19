@@ -24,6 +24,7 @@
 
 package net.fabricmc.loom.test.unit.providers.mappings
 
+import java.lang.reflect.Constructor
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.nio.file.Files
@@ -36,9 +37,11 @@ import spock.lang.Unroll
 import net.fabricmc.loom.configuration.providers.mappings.NoRemapMappingConfiguration
 
 class NoRemapMappingConfigurationTest extends Specification {
+	private static final Constructor<NoRemapMappingConfiguration> CONSTRUCTOR = NoRemapMappingConfiguration.getDeclaredConstructor(String, Path, String)
 	private static final Method VALIDATE_MAPPINGS = NoRemapMappingConfiguration.getDeclaredMethod("validateMappings", Path)
 
 	static {
+		CONSTRUCTOR.setAccessible(true)
 		VALIDATE_MAPPINGS.setAccessible(true)
 	}
 
@@ -54,6 +57,18 @@ class NoRemapMappingConfigurationTest extends Specification {
 
 		then:
 		noExceptionThrown()
+	}
+
+	def "reuses mappings hash"() {
+		given:
+		Path inputJar = Files.write(tempDir.resolve("annotations.jar"), new byte[0])
+		def configuration = CONSTRUCTOR.newInstance("annotations.test", inputJar, "cached-hash")
+
+		when:
+		Files.delete(inputJar)
+
+		then:
+		configuration.mappingsHash == "cached-hash"
 	}
 
 	@Unroll
