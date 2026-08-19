@@ -290,6 +290,17 @@ tasks.register('unobfBenchmark', JavaExec) {
 	}
 }
 
+tasks.register('fmjReadBenchmark', JavaExec) {
+	group = 'verification'
+	description = 'Benchmarks fabric.mod.json reads from the unobfuscated lifecycle fixture'
+	dependsOn(testClasses)
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'net.fabricmc.loom.test.benchmark.FmjReadBenchmark'
+	args providers.gradleProperty('benchmarkDir')
+			.orElse(layout.buildDirectory.dir('benchmark/unobf-v2').map { it.asFile.absolutePath })
+			.get()
+}
+
 // Workaround https://github.com/gradle/gradle/issues/25898
 tasks.withType(Test).configureEach {
 	jvmArgs = [
