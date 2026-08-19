@@ -28,13 +28,16 @@ import static net.fabricmc.loom.util.fmj.FabricModJsonUtils.readInt;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.Reader;
 import java.io.StringReader;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
+import java.util.zip.ZipFile;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonSyntaxException;
@@ -99,7 +102,7 @@ public final class FabricModJsonFactory {
 		JsonObject jsonObject;
 
 		try {
-			jsonObject = ZipUtils.unpackGsonNullable(zipPath, FABRIC_MOD_JSON, JsonObject.class);
+			jsonObject = readJsonObjectNullable(zipPath);
 		} catch (IOException e) {
 			throw new UncheckedIOException("Failed to read zip: " + zipPath, e);
 		} catch (JsonSyntaxException e) {
@@ -111,6 +114,29 @@ public final class FabricModJsonFactory {
 		}
 
 		return create(jsonObject, new FabricModJsonSource.ZipSource(zipPath));
+	}
+
+	@Nullable
+	private static JsonObject readJsonObjectNullable(Path zipPath) throws IOException {
+		if (zipPath.getFileSystem() != FileSystems.getDefault()) {
+			return ZipUtils.unpackGsonNullable(zipPath, FABRIC_MOD_JSON, JsonObject.class);
+		}
+
+		try (ZipFile zipFile = new ZipFile(zipPath.toFile())) {
+			final var entry = zipFile.getEntry(FABRIC_MOD_JSON);
+
+			if (entry == null) {
+				return null;
+			}
+
+			final byte[] bytes;
+
+			try (InputStream inputStream = zipFile.getInputStream(entry)) {
+				bytes = inputStream.readAllBytes();
+			}
+
+			return LoomGradlePlugin.GSON.fromJson(new String(bytes, StandardCharsets.UTF_8), JsonObject.class);
+		}
 	}
 
 	public static Optional<FabricModJson> createFromZipOptional(Path zipPath) {
