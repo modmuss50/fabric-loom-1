@@ -46,13 +46,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import net.fabricmc.loom.LoomGradleExtension;
+import net.fabricmc.loom.api.decompilers.JavadocStyle;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.configuration.ConfigContextImpl;
 import net.fabricmc.loom.configuration.processors.MappingProcessorContextImpl;
 import net.fabricmc.loom.configuration.processors.MinecraftJarProcessorManager;
 import net.fabricmc.loom.configuration.providers.mappings.MappingConfiguration;
 import net.fabricmc.loom.configuration.providers.mappings.RemapMappingConfiguration;
-import net.fabricmc.loom.api.decompilers.JavadocStyle;
+import net.fabricmc.loom.configuration.providers.minecraft.mapped.ProcessedNamedMinecraftProvider;
 import net.fabricmc.loom.task.GenerateSourcesTask;
 import net.fabricmc.loom.util.Checksum;
 import net.fabricmc.loom.util.service.ScopedServiceFactory;
@@ -98,7 +99,7 @@ public class SourceMappingsService extends Service<SourceMappingsService.Options
 
 	private static Path getMappings(Project project, Property<String> hashProperty) {
 		final LoomGradleExtension extension = LoomGradleExtension.get(project);
-		final MinecraftJarProcessorManager jarProcessor = MinecraftJarProcessorManager.create(project);
+		final MinecraftJarProcessorManager jarProcessor = getJarProcessorManager(project, extension);
 		final Path dir = extension.getFiles().getProjectPersistentCache().toPath().resolve("source_mappings");
 		final Path emptyMappingsPath = dir.resolve("empty.tiny"); // empty base mappings for unobf
 		final boolean disableObf = extension.disableObfuscation();
@@ -153,6 +154,19 @@ public class SourceMappingsService extends Service<SourceMappingsService.Options
 		}
 
 		return path;
+	}
+
+	@Nullable
+	private static MinecraftJarProcessorManager getJarProcessorManager(Project project, LoomGradleExtension extension) {
+		if (!extension.disableObfuscation()) {
+			return MinecraftJarProcessorManager.create(project);
+		}
+
+		if (extension.getNamedMinecraftProvider() instanceof ProcessedNamedMinecraftProvider<?, ?> processedProvider) {
+			return processedProvider.getJarProcessorManager();
+		}
+
+		return null;
 	}
 
 	private static void createMappings(Project project, @Nullable MinecraftJarProcessorManager jarProcessor, @Nullable MappingConfiguration mappingConfiguration, Path emptyMappings, Path outputMappings) throws IOException {

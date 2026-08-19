@@ -59,6 +59,10 @@ public abstract class ProcessedNamedMinecraftProvider<M extends MinecraftProvide
 		this.jarProcessorManager = Objects.requireNonNull(jarProcessorManager);
 	}
 
+	public MinecraftJarProcessorManager getJarProcessorManager() {
+		return jarProcessorManager;
+	}
+
 	@Override
 	public List<MinecraftJar> provide(ProvideContext context) throws Exception {
 		final List<MinecraftJar> parentMinecraftJars = parentMinecraftProvider.getMinecraftJars();
