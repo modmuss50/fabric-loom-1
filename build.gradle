@@ -312,6 +312,17 @@ tasks.register('installerScanBenchmark', JavaExec) {
 			.get()
 }
 
+tasks.register('minecraftJarMergerBenchmark', JavaExec) {
+	group = 'verification'
+	description = 'Benchmarks the unobfuscated Minecraft jar merger'
+	dependsOn(testClasses)
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'net.fabricmc.loom.test.benchmark.MinecraftJarMergerBenchmark'
+	args providers.gradleProperty('benchmarkDir')
+			.orElse(layout.buildDirectory.dir('benchmark/unobf-v2').map { it.asFile.absolutePath })
+			.get()
+}
+
 // Workaround https://github.com/gradle/gradle/issues/25898
 tasks.withType(Test).configureEach {
 	jvmArgs = [
