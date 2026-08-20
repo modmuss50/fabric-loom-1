@@ -24,6 +24,10 @@
 
 package net.fabricmc.loom.test.benchmark
 
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.zip.ZipFile
+
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJarMerger
 import net.fabricmc.loom.util.Checksum
 
@@ -37,7 +41,7 @@ class MinecraftJarMergerBenchmark {
 	private static final String MINECRAFT_VERSION = "26.1-snapshot-1"
 	private static final String CLIENT_SHA1 = "bd354bbd46835d7c7753e0b19c718777fb2386ba"
 	private static final String SERVER_SHA1 = "2aba7467eb813f864f6eacd527c08b9dd71f2ca5"
-	private static final String OUTPUT_SHA1 = "f287b164c56788642018b58fb7e350964aec5528"
+	private static final String OUTPUT_SIGNATURE = "e7ca3231477f4f12ae985238e8498f8383c36b953bd9cd31c5d89254bb24d7e1"
 
 	static void main(String[] args) {
 		if (args.length != 1) {
@@ -53,13 +57,15 @@ class MinecraftJarMergerBenchmark {
 		def minecraftDir = new File(benchmarkDir, "gradlehome/caches/fabric-loom/${MINECRAFT_VERSION}")
 		def client = new File(minecraftDir, "minecraft-client.jar")
 		def server = new File(minecraftDir, "minecraft-extracted_server.jar")
+		def expectedOutput = new File(minecraftDir, "minecraft-merged.jar")
 		def output = new File(benchmarkDir, "minecraft-merger-output.jar")
 		assert Checksum.of(client).sha1().matchesStr(CLIENT_SHA1)
 		assert Checksum.of(server).sha1().matchesStr(SERVER_SHA1)
+		assert contentSignature(expectedOutput) == OUTPUT_SIGNATURE
 
 		WARMUPS.times {
 			merge(client, server, output)
-			assert Checksum.of(output).sha1().matchesStr(OUTPUT_SHA1)
+			assert contentSignature(output) == OUTPUT_SIGNATURE
 		}
 
 		def durations = []
@@ -68,7 +74,7 @@ class MinecraftJarMergerBenchmark {
 			long start = System.nanoTime()
 			merge(client, server, output)
 			long duration = System.nanoTime() - start
-			assert Checksum.of(output).sha1().matchesStr(OUTPUT_SHA1)
+			assert contentSignature(output) == OUTPUT_SIGNATURE
 			durations << [iteration, duration]
 		}
 
@@ -81,7 +87,7 @@ loomDirty=${loomDirty()}
 minecraft=${MINECRAFT_VERSION}
 clientSha1=${CLIENT_SHA1}
 serverSha1=${SERVER_SHA1}
-outputSha1=${OUTPUT_SHA1}
+outputSignatureSha256=${OUTPUT_SIGNATURE}
 """
 
 		def sorted = durations.collect { it[1] }.sort()
@@ -93,6 +99,20 @@ outputSha1=${OUTPUT_SHA1}
 		new MinecraftJarMerger(client, server, output).withCloseable {
 			it.merge()
 		}
+	}
+
+	private static String contentSignature(File file) {
+		def digest = MessageDigest.getInstance("SHA-256")
+
+		new ZipFile(file).withCloseable { zip ->
+			Collections.list(zip.entries()).findAll { !it.directory }.sort { it.name }.each { entry ->
+				digest.update(entry.name.getBytes(StandardCharsets.UTF_8))
+				digest.update((byte) 0)
+				digest.update(zip.getInputStream(entry).withCloseable { it.readAllBytes() })
+			}
+		}
+
+		return HexFormat.of().formatHex(digest.digest())
 	}
 
 	private static String loomRevision() {
