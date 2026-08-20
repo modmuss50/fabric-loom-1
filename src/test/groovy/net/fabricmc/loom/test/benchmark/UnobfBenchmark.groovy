@@ -83,7 +83,10 @@ public final class BenchmarkMod {
 			new Scenario("full-configuration", ["help"], false, false, false, false),
 			new Scenario("offline-configuration", ["help"], false, false, false, true),
 			new Scenario("gen-sources-configuration", ["genSources", "--dry-run"], false, false, false, false),
-			new Scenario("dli-config", ["generateDLIConfig", "--rerun-tasks"], false, false, false, true),
+			new Scenario("dli-config", [
+				"generateDLIConfig",
+				"--rerun-tasks"
+			], false, false, false, true),
 			new Scenario("configuration-cache-reuse", ["help"], false, false, true, false),
 			new Scenario("clean-build", ["clean", "build"], false, false, true, false),
 			new Scenario("no-op-build", ["build"], false, false, true, false),

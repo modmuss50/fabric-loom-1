@@ -10,16 +10,16 @@
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
  *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
  * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 
 package net.fabricmc.loom.test.benchmark
@@ -36,8 +36,8 @@ import net.fabricmc.loom.util.Checksum
  * {@code ./gradlew minecraftJarMergerBenchmark}.
  */
 class MinecraftJarMergerBenchmark {
-	private static final int WARMUPS = 3
-	private static final int ITERATIONS = 15
+	private static final int WARMUPS = 10
+	private static final int ITERATIONS = 30
 	private static final String MINECRAFT_VERSION = "26.1-snapshot-1"
 	private static final String CLIENT_SHA1 = "bd354bbd46835d7c7753e0b19c718777fb2386ba"
 	private static final String SERVER_SHA1 = "2aba7467eb813f864f6eacd527c08b9dd71f2ca5"
@@ -97,6 +97,7 @@ outputSignatureSha256=${OUTPUT_SIGNATURE}
 
 	private static void merge(File client, File server, File output) {
 		new MinecraftJarMerger(client, server, output).withCloseable {
+			it.enableSyntheticParamsOffset()
 			it.merge()
 		}
 	}
