@@ -52,7 +52,6 @@ import org.gradle.api.tasks.TaskAction;
 import org.gradle.work.DisableCachingByDefault;
 
 import net.fabricmc.loom.LoomGradleExtension;
-import net.fabricmc.loom.LoomGradlePlugin;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftVersionMeta;
 import net.fabricmc.loom.configuration.providers.minecraft.mapped.MappedMinecraftProvider;
@@ -63,10 +62,16 @@ import net.fabricmc.loom.util.service.ScopedServiceFactory;
 @DisableCachingByDefault
 public abstract class GenerateDLIConfigTask extends AbstractLoomTask {
 	@Input
-	protected abstract Property<String> getVersionInfoJson();
+	protected abstract Property<Boolean> getLegacyAssets();
 
 	@Input
-	protected abstract Property<String> getMinecraftVersion();
+	protected abstract Property<String> getMinecraftId();
+
+	@Input
+	protected abstract Property<String> getAssetIndex();
+
+	@Input
+	protected abstract Property<Boolean> getHasNativesToExtract();
 
 	@Input
 	protected abstract Property<Boolean> getSplitSourceSets();
@@ -112,8 +117,11 @@ public abstract class GenerateDLIConfigTask extends AbstractLoomTask {
 	protected abstract Property<ClasspathGroupService.Options> getClasspathGroupOptions();
 
 	public GenerateDLIConfigTask() {
-		getVersionInfoJson().set(LoomGradlePlugin.GSON.toJson(getExtension().getMinecraftProvider().getVersionInfo()));
-		getMinecraftVersion().set(getExtension().getMinecraftProvider().minecraftVersion());
+		final MinecraftVersionMeta versionInfo = getExtension().getMinecraftProvider().getVersionInfo();
+		getLegacyAssets().set(versionInfo.assets().equals("legacy"));
+		getMinecraftId().set(versionInfo.id());
+		getAssetIndex().set(versionInfo.assetIndex().fabricId(getExtension().getMinecraftProvider().minecraftVersion()));
+		getHasNativesToExtract().set(versionInfo.hasNativesToExtract());
 		getSplitSourceSets().set(getExtension().areEnvironmentSourceSetsSplit());
 		getANSISupportedIDE().set(ansiSupportedIde(getProject()));
 		getPlainConsole().set(getProject().getGradle().getStartParameter().getConsoleOutput() == ConsoleOutput.Plain);
@@ -135,11 +143,10 @@ public abstract class GenerateDLIConfigTask extends AbstractLoomTask {
 
 	@TaskAction
 	public void run() throws IOException {
-		final MinecraftVersionMeta versionInfo = LoomGradlePlugin.GSON.fromJson(getVersionInfoJson().get(), MinecraftVersionMeta.class);
 		File assetsDirectory = new File(getAssetsDirectoryPath().get());
 
-		if (versionInfo.assets().equals("legacy")) {
-			assetsDirectory = new File(assetsDirectory, "/legacy/" + versionInfo.id());
+		if (getLegacyAssets().get()) {
+			assetsDirectory = new File(assetsDirectory, "/legacy/" + getMinecraftId().get());
 		}
 
 		final LaunchConfig launchConfig = new LaunchConfig()
@@ -150,7 +157,7 @@ public abstract class GenerateDLIConfigTask extends AbstractLoomTask {
 				.property("fabric.defaultMixinRemapType", getDefaultMixinRemapType().get())
 
 				.argument("client", "--assetIndex")
-				.argument("client", versionInfo.assetIndex().fabricId(getMinecraftVersion().get()))
+				.argument("client", getAssetIndex().get())
 				.argument("client", "--assetsDir")
 				.argument("client", assetsDirectory.getAbsolutePath());
 
@@ -158,7 +165,7 @@ public abstract class GenerateDLIConfigTask extends AbstractLoomTask {
 			launchConfig.property("fabric.remapClasspathFile", getRemapClasspathFile().get().getAsFile().getAbsolutePath());
 		}
 
-		if (versionInfo.hasNativesToExtract()) {
+		if (getHasNativesToExtract().get()) {
 			String nativesPath = getNativesDirectoryPath().get();
 
 			launchConfig
