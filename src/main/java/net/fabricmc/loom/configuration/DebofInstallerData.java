@@ -30,6 +30,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.zip.ZipFile;
 
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
@@ -69,17 +70,20 @@ public class DebofInstallerData {
 	private static InstallerData getInstaller(File file) {
 		final Path path = file.toPath();
 
-		try (FileSystemUtil.Delegate fs = FileSystemUtil.getJarFileSystem(path)) {
-			Path installerPath = fs.getPath(InstallerData.INSTALLER_PATH);
-
-			if (Files.notExists(installerPath)) {
-				return null;
+		try {
+			try (ZipFile zipFile = new ZipFile(file)) {
+				if (zipFile.getEntry(InstallerData.INSTALLER_PATH) == null) {
+					return null;
+				}
 			}
 
-			byte[] installerData = Files.readAllBytes(installerPath);
-			FabricModJson fabricModJson = FabricModJsonFactory.createFromZip(fs, path);
-			LOGGER.info("Found installer in mod {} version {}", fabricModJson.getId(), fabricModJson.getModVersion());
-			return InstallerData.fromBytes(installerData, fabricModJson.getModVersion());
+			try (FileSystemUtil.Delegate fs = FileSystemUtil.getJarFileSystem(path)) {
+				Path installerPath = fs.getPath(InstallerData.INSTALLER_PATH);
+				byte[] installerData = Files.readAllBytes(installerPath);
+				FabricModJson fabricModJson = FabricModJsonFactory.createFromZip(fs, path);
+				LOGGER.info("Found installer in mod {} version {}", fabricModJson.getId(), fabricModJson.getModVersion());
+				return InstallerData.fromBytes(installerData, fabricModJson.getModVersion());
+			}
 		} catch (IOException e) {
 			LOGGER.debug("Failed to read installer data from file '{}'", file, e);
 			return null;

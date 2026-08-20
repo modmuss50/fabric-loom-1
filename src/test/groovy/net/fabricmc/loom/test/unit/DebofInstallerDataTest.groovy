@@ -26,6 +26,7 @@ package net.fabricmc.loom.test.unit
 
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
+import java.nio.file.Files
 
 import spock.lang.Specification
 
@@ -54,6 +55,12 @@ class DebofInstallerDataTest extends Specification {
 		then:
 		installer.version() == "1.2.3"
 		installer.installerJson().getAsJsonObject("libraries").getAsJsonArray("common").isEmpty()
+
+		when:
+		Files.delete(jar)
+
+		then:
+		Files.notExists(jar)
 	}
 
 	def "ignores archives without installer metadata"() {
@@ -62,6 +69,26 @@ class DebofInstallerDataTest extends Specification {
 
 		expect:
 		getInstaller(jar.toFile()) == null
+	}
+
+	def "ignores invalid archives"() {
+		given:
+		def jar = Files.createTempFile("loom-test", ".jar")
+		Files.writeString(jar, "not a zip")
+
+		expect:
+		getInstaller(jar.toFile()) == null
+	}
+
+	def "requires mod metadata when installer metadata is present"() {
+		given:
+		def jar = createZip(["fabric-installer.json": '''{"libraries":{"common":[]}}'''])
+
+		when:
+		getInstaller(jar.toFile())
+
+		then:
+		thrown(UncheckedIOException)
 	}
 
 	private static InstallerData getInstaller(File file) {
