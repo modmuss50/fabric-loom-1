@@ -32,6 +32,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 
@@ -48,6 +51,7 @@ import org.gradle.api.provider.Provider;
 import org.gradle.api.tasks.AbstractCopyTask;
 import org.gradle.api.tasks.SourceSet;
 import org.gradle.api.tasks.TaskContainer;
+import org.gradle.api.tasks.TaskProvider;
 import org.gradle.api.tasks.compile.JavaCompile;
 import org.gradle.api.tasks.javadoc.Javadoc;
 import org.gradle.api.tasks.testing.Test;
@@ -69,15 +73,19 @@ import net.fabricmc.loom.configuration.providers.mappings.LayeredMappingsFactory
 import net.fabricmc.loom.configuration.providers.mappings.MappingConfiguration;
 import net.fabricmc.loom.configuration.providers.mappings.NoRemapMappingConfiguration;
 import net.fabricmc.loom.configuration.providers.mappings.RemapMappingConfiguration;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJar;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftMetadataProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftSourceSets;
+import net.fabricmc.loom.configuration.providers.minecraft.TaskBasedMinecraftConfiguration;
 import net.fabricmc.loom.configuration.providers.minecraft.mapped.AbstractMappedMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.mapped.IntermediaryMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.mapped.NamedMinecraftProvider;
 import net.fabricmc.loom.extension.MixinExtension;
+import net.fabricmc.loom.task.ProcessMinecraftJarTask;
 import net.fabricmc.loom.task.service.ClasspathGroupService;
 import net.fabricmc.loom.util.Checksum;
+import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.ExceptionUtil;
 import net.fabricmc.loom.util.ProcessUtil;
 import net.fabricmc.loom.util.gradle.GradleUtils;
@@ -98,6 +106,15 @@ public abstract class CompileConfiguration implements Runnable {
 	@Override
 	public void run() {
 		LoomGradleExtension extension = LoomGradleExtension.get(getProject());
+		final boolean taskBasedMinecraft = TaskBasedMinecraftConfiguration.isEnabled(getProject());
+
+		if (taskBasedMinecraft) {
+			getTasks().register(TaskBasedMinecraftConfiguration.PROCESS_MINECRAFT_JARS_TASK, task -> {
+				task.setDescription("Process Minecraft jars lazily.");
+				task.setGroup(Constants.TaskGroup.FABRIC);
+			});
+			TaskBasedMinecraftConfiguration.configureIde(getProject());
+		}
 
 		getTasks().named(JavaPlugin.JAVADOC_TASK_NAME, Javadoc.class).configure(javadoc -> {
 			final SourceSet main = SourceSetHelper.getMainSourceSet(getProject());
@@ -258,6 +275,7 @@ public abstract class CompileConfiguration implements Runnable {
 		final LoomGradleExtension extension = configContext.extension();
 		final IntermediaryMinecraftProvider<?> intermediaryMinecraftProvider = extension.disableObfuscation() ? null : extension.getIntermediaryMinecraftProvider();
 		final NamedMinecraftProvider<?> namedMinecraftProvider = extension.getNamedMinecraftProvider();
+		final boolean taskBasedMinecraft = TaskBasedMinecraftConfiguration.isEnabled(getProject());
 
 		final var provideContext = new AbstractMappedMinecraftProvider.ProvideContext(true, extension.refreshDeps(), configContext);
 
@@ -265,7 +283,46 @@ public abstract class CompileConfiguration implements Runnable {
 			intermediaryMinecraftProvider.provide(provideContext);
 		}
 
-		namedMinecraftProvider.provide(provideContext);
+		final List<MinecraftJar> minecraftJars = namedMinecraftProvider.provide(
+				new AbstractMappedMinecraftProvider.ProvideContext(!taskBasedMinecraft, extension.refreshDeps(), configContext)
+		);
+
+		if (taskBasedMinecraft) {
+			applyTaskBasedMinecraftDependencies(namedMinecraftProvider, minecraftJars);
+		}
+	}
+
+	private void applyTaskBasedMinecraftDependencies(NamedMinecraftProvider<?> namedMinecraftProvider, List<MinecraftJar> minecraftJars) {
+		final TaskProvider<Task> aggregateTask = getTasks().named(TaskBasedMinecraftConfiguration.PROCESS_MINECRAFT_JARS_TASK);
+		final Map<MinecraftJar.Type, TaskProvider<ProcessMinecraftJarTask>> processTasks = new EnumMap<>(MinecraftJar.Type.class);
+
+		for (MinecraftJar minecraftJar : minecraftJars) {
+			final MinecraftJar outputJar = TaskBasedMinecraftConfiguration.getOutputJar(getProject(), minecraftJar);
+			final String taskName = TaskBasedMinecraftConfiguration.getProcessTaskName(minecraftJar.getType());
+			final TaskProvider<ProcessMinecraftJarTask> processTask = getTasks().register(taskName, ProcessMinecraftJarTask.class, task -> {
+				task.setDescription("Process the %s Minecraft jar.".formatted(minecraftJar.getType()));
+				task.setGroup(Constants.TaskGroup.FABRIC);
+				task.getInputJar().fileValue(minecraftJar.toFile());
+				task.getOutputJar().fileValue(outputJar.toFile());
+			});
+
+			aggregateTask.configure(task -> task.dependsOn(processTask));
+			processTasks.put(minecraftJar.getType(), processTask);
+		}
+
+		MinecraftSourceSets.get(getProject()).applyDependencies((configuration, type) -> {
+			final TaskProvider<ProcessMinecraftJarTask> processTask = processTasks.get(type);
+
+			if (processTask == null) {
+				throw new IllegalStateException("Missing process task for Minecraft jar type: " + type);
+			}
+
+			final var outputFiles = getProject().files(processTask.flatMap(ProcessMinecraftJarTask::getOutputJar));
+			outputFiles.builtBy(processTask);
+			getProject().getDependencies().add(configuration, outputFiles);
+		}, namedMinecraftProvider.getDependencyTypes());
+
+		TaskBasedMinecraftConfiguration.configureEclipseSources(getProject(), minecraftJars);
 	}
 
 	private void registerGameProcessors(ConfigContext configContext) {

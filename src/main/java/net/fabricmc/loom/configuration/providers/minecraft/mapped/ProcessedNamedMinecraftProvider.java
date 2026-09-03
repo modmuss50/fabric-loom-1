@@ -27,6 +27,7 @@ package net.fabricmc.loom.configuration.providers.minecraft.mapped;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -45,15 +46,19 @@ import net.fabricmc.loom.configuration.providers.minecraft.MinecraftSourceSets;
 import net.fabricmc.loom.configuration.providers.minecraft.SingleJarEnvType;
 import net.fabricmc.loom.configuration.providers.minecraft.SingleJarMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.SplitMinecraftProvider;
+import net.fabricmc.loom.util.Constants;
+import net.fabricmc.loom.util.gradle.GradleUtils;
 
 public abstract class ProcessedNamedMinecraftProvider<M extends MinecraftProvider, P extends NamedMinecraftProvider<M>> extends NamedMinecraftProvider<M> {
 	private final P parentMinecraftProvider;
 	private final MinecraftJarProcessorManager jarProcessorManager;
+	private final boolean taskBasedMinecraft;
 
 	public ProcessedNamedMinecraftProvider(P parentMinecraftProvide, MinecraftJarProcessorManager jarProcessorManager) {
 		super(parentMinecraftProvide.getProject(), parentMinecraftProvide.getMinecraftProvider());
 		this.parentMinecraftProvider = parentMinecraftProvide;
 		this.jarProcessorManager = Objects.requireNonNull(jarProcessorManager);
+		this.taskBasedMinecraft = GradleUtils.getBooleanProperty(getProject(), Constants.Properties.TASK_BASED_MINECRAFT);
 	}
 
 	@Override
@@ -100,8 +105,16 @@ public abstract class ProcessedNamedMinecraftProvider<M extends MinecraftProvide
 			final MinecraftJar outputJar = entry.getValue();
 			deleteSimilarJars(outputJar.getPath());
 
-			final LocalMavenHelper mavenHelper = getMavenHelper(minecraftJar.getType());
-			final Path outputPath = mavenHelper.copyToMaven(minecraftJar.getPath(), null);
+			final Path outputPath;
+
+			if (taskBasedMinecraft) {
+				outputPath = outputJar.getPath();
+				Files.createDirectories(outputPath.getParent());
+				Files.copy(minecraftJar.getPath(), outputPath, StandardCopyOption.REPLACE_EXISTING);
+			} else {
+				final LocalMavenHelper mavenHelper = getMavenHelper(minecraftJar.getType());
+				outputPath = mavenHelper.copyToMaven(minecraftJar.getPath(), null);
+			}
 
 			assert outputJar.getPath().equals(outputPath);
 
@@ -170,8 +183,45 @@ public abstract class ProcessedNamedMinecraftProvider<M extends MinecraftProvide
 	}
 
 	private Path getProcessedPath(MinecraftJar minecraftJar) {
+		if (taskBasedMinecraft) {
+			return extension.getFiles().getProjectPersistentCache().toPath()
+					.resolve("minecraft")
+					.resolve("processed")
+					.resolve(getVersion())
+					.resolve(jarProcessorManager.getJarHash())
+					.resolve(minecraftJar.getType().toString())
+					.resolve("minecraft-%s.jar".formatted(minecraftJar.getType()));
+		}
+
 		final LocalMavenHelper mavenHelper = getMavenHelper(minecraftJar.getType());
 		return mavenHelper.getOutputFile(null);
+	}
+
+	@Override
+	protected boolean shouldRefreshOutputs(ProvideContext context) {
+		if (!taskBasedMinecraft) {
+			return super.shouldRefreshOutputs(context);
+		}
+
+		if (context.refreshOutputs()) {
+			return true;
+		}
+
+		final List<? extends OutputJar> outputJars = getOutputJars();
+
+		if (outputJars.isEmpty()) {
+			throw new IllegalStateException("No output jars provided");
+		}
+
+		for (OutputJar outputJar : outputJars) {
+			final MinecraftJar minecraftJar = outputJar.outputJar();
+
+			if (!Files.exists(minecraftJar.getPath()) || requiresBackupJars() && !Files.exists(getBackupJarPath(minecraftJar))) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	public MinecraftJar getProcessedJar(MinecraftJar minecraftJar) {

@@ -31,6 +31,7 @@ import org.gradle.api.tasks.TaskProvider;
 
 import net.fabricmc.loom.api.decompilers.DecompilerOptions;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJar;
+import net.fabricmc.loom.configuration.providers.minecraft.TaskBasedMinecraftConfiguration;
 import net.fabricmc.loom.configuration.providers.minecraft.mapped.MappedMinecraftProvider;
 import net.fabricmc.loom.task.GenerateSourcesTask;
 import net.fabricmc.loom.util.Constants;
@@ -51,14 +52,12 @@ public final class SplitDecompileConfiguration extends DecompileConfiguration<Ma
 		final MinecraftJar commonJar = minecraftProvider.getCommonJar();
 		final MinecraftJar clientOnlyJar = minecraftProvider.getClientOnlyJar();
 
-		final TaskProvider<Task> commonDecompileTask = createDecompileTasks("Common", task -> {
+		final TaskProvider<Task> commonDecompileTask = createDecompileTasks("Common", commonJar, task -> {
 			task.getInputJarName().set(commonJar.getName());
-			task.getSourcesOutputJar().fileValue(GenerateSourcesTask.getJarFileWithSuffix("-sources.jar", commonJar.getPath()));
 		});
 
-		final TaskProvider<Task> clientOnlyDecompileTask = createDecompileTasks("ClientOnly", task -> {
+		final TaskProvider<Task> clientOnlyDecompileTask = createDecompileTasks("ClientOnly", clientOnlyJar, task -> {
 			task.getInputJarName().set(clientOnlyJar.getName());
-			task.getSourcesOutputJar().fileValue(GenerateSourcesTask.getJarFileWithSuffix("-sources.jar", clientOnlyJar.getPath()));
 
 			// Don't allow them to run at the same time.
 			task.mustRunAfter(commonDecompileTask);
@@ -92,17 +91,35 @@ public final class SplitDecompileConfiguration extends DecompileConfiguration<Ma
 		});
 	}
 
-	private TaskProvider<Task> createDecompileTasks(String name, Action<GenerateSourcesTask> configureAction) {
+	private TaskProvider<Task> createDecompileTasks(String name, MinecraftJar minecraftJar, Action<GenerateSourcesTask> configureAction) {
+		final boolean taskBasedMinecraft = TaskBasedMinecraftConfiguration.isEnabled(project);
+
 		extension.getDecompilerOptions().forEach(options -> {
 			final String decompilerName = options.getFormattedName();
 			final String taskName = "gen%sSourcesWith%s".formatted(name, decompilerName);
+			final TaskProvider<GenerateSourcesTask> generateSourcesTask = project.getTasks().register(taskName, GenerateSourcesTask.class, options);
+			final TaskProvider<Task> processTask = taskBasedMinecraft
+					? project.getTasks().named(TaskBasedMinecraftConfiguration.getProcessTaskName(minecraftJar.getType()))
+					: null;
 
-			project.getTasks().register(taskName, GenerateSourcesTask.class, options).configure(task -> {
+			generateSourcesTask.configure(task -> {
 				configureAction.execute(task);
+				task.getSourcesOutputJar().fileValue(taskBasedMinecraft
+						? TaskBasedMinecraftConfiguration.getSourcesPath(project, minecraftJar).toFile()
+						: GenerateSourcesTask.getJarFileWithSuffix("-sources.jar", minecraftJar.getPath()));
+
+				if (processTask != null) {
+					task.finalizedBy(processTask);
+				}
+
 				task.dependsOn(project.getTasks().named("validateAccessWidener"));
 				task.setDescription("Decompile minecraft using %s.".formatted(decompilerName));
 				task.setGroup(Constants.TaskGroup.FABRIC);
 			});
+
+			if (processTask != null) {
+				processTask.configure(task -> task.mustRunAfter(generateSourcesTask));
+			}
 		});
 
 		return project.getTasks().register("gen%sSources".formatted(name), task -> {
