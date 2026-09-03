@@ -31,6 +31,7 @@ import org.gradle.testkit.runner.GradleRunner
 import spock.lang.Shared
 
 import net.fabricmc.loom.test.LoomTestConstants
+import net.fabricmc.loom.util.Checksum
 import net.fabricmc.loom.util.ZipUtils
 
 trait GradleProjectTestTrait {
@@ -257,8 +258,36 @@ trait GradleProjectTestTrait {
 		}
 
 		File getGeneratedMinecraft(String mappings, String jarType = "merged", String classifier = "") {
+			String outputType = jarType.endsWith("-deobf") ? jarType.substring(0, jarType.length() - "-deobf".length()) : jarType
+			outputType = outputType == "clientonly" ? "clientOnly" : outputType
 			String classifierSuffix = classifier.isEmpty() ? "" : "-$classifier"
-			return new File(getGradleHomeDir(), "caches/fabric-loom/minecraftMaven/net/minecraft/minecraft-${jarType}/${mappings}/minecraft-${jarType}-${mappings}${classifierSuffix}.jar")
+			List<File> outputRoots = [
+				getProjectDir().absolutePath,
+				getProjectDir().canonicalPath
+			]
+			.toSet()
+			.collect { projectPath ->
+				String projectHash = Checksum.of(projectPath + "::").sha1().hex()
+				new File(getGradleHomeDir(), "caches/fabric-loom/taskBasedMinecraft/${projectHash}")
+			}
+			String outputName = "minecraft-${outputType}${classifierSuffix}.jar"
+			List<File> matches = []
+
+			outputRoots.each { outputRoot ->
+				if (outputRoot.exists()) {
+					outputRoot.eachFileRecurse { file ->
+						if (file.isFile() && file.name == outputName && file.parentFile.name == outputType) {
+							matches.add(file)
+						}
+					}
+				}
+			}
+
+			if (matches.size() != 1) {
+				throw new FileNotFoundException("Expected one task-backed Minecraft ${jarType} ${classifier ?: 'binary'} jar for mappings ${mappings}, found ${matches.size()} beneath ${outputRoots}")
+			}
+
+			return matches[0]
 		}
 
 		File getGeneratedSources(String mappings, String jarType = "merged") {
@@ -266,19 +295,7 @@ trait GradleProjectTestTrait {
 		}
 
 		File getGeneratedLocalMinecraft(String mappings, String jarType = "merged", String classifier = "") {
-			String classifierSuffix = classifier.isEmpty() ? "" : "-$classifier"
-
-			File file = new File(getProjectDir(), ".gradle/loom-cache/minecraftMaven/net/minecraft")
-			file = file.listFiles().find {
-				it.name.startsWith("minecraft-${jarType}-")
-			}
-
-			if (file == null) {
-				throw new FileNotFoundException()
-			}
-
-			String jarFileName = "${file.name}-${mappings}${classifierSuffix}.jar"
-			return new File(file, "${mappings}/${jarFileName}")
+			return getGeneratedMinecraft(mappings, jarType, classifier)
 		}
 
 		File getGeneratedLocalSources(String mappings, String jarType = "merged") {

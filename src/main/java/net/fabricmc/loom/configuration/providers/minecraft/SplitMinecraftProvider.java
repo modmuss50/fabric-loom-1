@@ -24,15 +24,16 @@
 
 package net.fabricmc.loom.configuration.providers.minecraft;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.configuration.ConfigContext;
-import net.fabricmc.loom.configuration.providers.BundleMetadata;
+import net.fabricmc.loom.task.SplitMinecraftJarsTask;
+import net.fabricmc.loom.util.Constants;
 
 public final class SplitMinecraftProvider extends MinecraftProvider {
+	public static final String SPLIT_TASK = "splitMinecraftJars";
 	private Path minecraftClientOnlyJar;
 	private Path minecraftCommonJar;
 
@@ -62,34 +63,21 @@ public final class SplitMinecraftProvider extends MinecraftProvider {
 	public void provide() throws Exception {
 		super.provide();
 
-		boolean requiresRefresh = getExtension().refreshDeps() || Files.notExists(minecraftClientOnlyJar) || Files.notExists(minecraftCommonJar);
-
-		if (!requiresRefresh) {
-			return;
-		}
-
-		BundleMetadata serverBundleMetadata = getServerBundleMetadata();
-
-		if (serverBundleMetadata == null) {
-			throw new UnsupportedOperationException("Only Minecraft versions using a bundled server jar can be split, please use a merged jar setup for this version of minecraft");
-		}
-
 		final Path clientJar = getMinecraftClientJar().toPath();
 		final Path serverJar = getMinecraftExtractedServerJar().toPath();
-
-		try (MinecraftJarSplitter jarSplitter = new MinecraftJarSplitter(clientJar, serverJar)) {
-			// Required for loader to compute the version info also useful to have in both jars.
-			jarSplitter.sharedEntry("version.json");
-			jarSplitter.sharedEntry("assets/.mcassetsroot");
-			jarSplitter.sharedEntry("assets/minecraft/lang/en_us.json");
-
-			jarSplitter.split(minecraftClientOnlyJar, minecraftCommonJar);
-		} catch (Exception e) {
-			Files.deleteIfExists(minecraftClientOnlyJar);
-			Files.deleteIfExists(minecraftCommonJar);
-
-			throw new RuntimeException("Failed to split minecraft", e);
-		}
+		final var splitTask = getProject().getTasks().register(SPLIT_TASK, SplitMinecraftJarsTask.class, task -> {
+			task.setDescription("Splits Minecraft into common and client-only jars.");
+			task.setGroup(Constants.TaskGroup.FABRIC);
+			task.getClientJar().fileValue(clientJar.toFile());
+			task.getServerJar().fileValue(serverJar.toFile());
+			task.getServerBundleJar().fileValue(getMinecraftServerJar());
+			task.getCommonJar().fileValue(minecraftCommonJar.toFile());
+			task.getClientOnlyJar().fileValue(minecraftClientOnlyJar.toFile());
+		});
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(getProject());
+		taskGraph.dependsOn(splitTask, clientJar, serverJar, getMinecraftServerJar().toPath());
+		taskGraph.registerOutput(minecraftCommonJar, splitTask);
+		taskGraph.registerOutput(minecraftClientOnlyJar, splitTask);
 	}
 
 	public Path getMinecraftClientOnlyJar() {

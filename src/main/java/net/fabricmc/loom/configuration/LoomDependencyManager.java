@@ -28,7 +28,6 @@ import org.gradle.api.Project;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.configuration.mods.ModConfigurationRemapper;
-import net.fabricmc.loom.util.SourceRemapper;
 import net.fabricmc.loom.util.service.ServiceFactory;
 
 public record LoomDependencyManager(Project project, ServiceFactory serviceFactory, LoomGradleExtension extension) {
@@ -41,21 +40,10 @@ public record LoomDependencyManager(Project project, ServiceFactory serviceFacto
 	}
 
 	private void handleRemapDependencies() {
-		LoomGradleExtension extension = LoomGradleExtension.get(project);
-
-		SourceRemapper sourceRemapper = new SourceRemapper(project, serviceFactory, true);
-		String mappingsIdentifier = extension.getMappingConfiguration().mappingsIdentifier();
-
-		ModConfigurationRemapper.supplyModConfigurations(project, serviceFactory, mappingsIdentifier, extension, sourceRemapper);
-
-		sourceRemapper.remapAll();
-
-		if (extension.getInstallerData() == null) {
-			project.getLogger().info("fabric-installer.json not found in dependencies");
-		}
+		ModConfigurationRemapper.supplyModConfigurations(project, extension);
 	}
 
 	private void handleNonRemapDependencies() {
-		DebofInstallerData.findAndApply(project);
+		DebofInstallerData.registerTasks(project);
 	}
 }

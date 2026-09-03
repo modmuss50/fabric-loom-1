@@ -26,7 +26,6 @@ package net.fabricmc.loom.configuration.providers.minecraft;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
@@ -36,18 +35,17 @@ import org.slf4j.LoggerFactory;
 
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.configuration.ConfigContext;
+import net.fabricmc.loom.task.MergeMinecraftJarsTask;
+import net.fabricmc.loom.util.Constants;
 
 public final class MergedMinecraftProvider extends MinecraftProvider {
 	private static final Logger LOGGER = LoggerFactory.getLogger(MergedMinecraftProvider.class);
+	public static final String MERGE_TASK = "mergeMinecraftJars";
 
 	private Path minecraftMergedJar;
 
 	public MergedMinecraftProvider(MinecraftMetadataProvider metadataProvider, ConfigContext configContext) {
 		super(metadataProvider, configContext);
-
-		if (isLegacyVersion()) {
-			throw new RuntimeException("something has gone wrong - merged jar configuration selected but Minecraft " + metadataProvider.getMinecraftVersion() + " does not allow merging the obfuscated jars - the legacy-merged jar configuration should have been selected!");
-		}
 	}
 
 	@Override
@@ -74,29 +72,16 @@ public final class MergedMinecraftProvider extends MinecraftProvider {
 			throw new UnsupportedOperationException("This version does not provide both the client and server jars - please select the client-only or server-only jar configuration!");
 		}
 
-		if (!Files.exists(minecraftMergedJar) || getExtension().refreshDeps()) {
-			try {
-				mergeJars();
-			} catch (Throwable e) {
-				Files.deleteIfExists(getMinecraftClientJar().toPath());
-				Files.deleteIfExists(getMinecraftServerJar().toPath());
-				Files.deleteIfExists(minecraftMergedJar);
-
-				getProject().getLogger().error("Could not merge JARs! Deleting source JARs - please re-run the command and move on.", e);
-				throw e;
-			}
-		}
-	}
-
-	private void mergeJars() throws IOException {
-		File minecraftClientJar = getMinecraftClientJar();
-		File minecraftServerJar = getMinecraftServerJar();
-
-		if (getServerBundleMetadata() != null) {
-			minecraftServerJar = getMinecraftExtractedServerJar();
-		}
-
-		mergeJars(minecraftClientJar, minecraftServerJar, minecraftMergedJar.toFile());
+		final var mergeTask = getProject().getTasks().register(MERGE_TASK, MergeMinecraftJarsTask.class, task -> {
+			task.setDescription("Merges the Minecraft client and server jars.");
+			task.setGroup(Constants.TaskGroup.FABRIC);
+			task.getClientJar().fileValue(getMinecraftClientJar());
+			task.getServerJar().fileValue(getMinecraftExtractedServerJar());
+			task.getOutputJar().fileValue(minecraftMergedJar.toFile());
+		});
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(getProject());
+		taskGraph.dependsOn(mergeTask, getMinecraftClientJar().toPath(), getMinecraftExtractedServerJar().toPath());
+		taskGraph.registerOutput(minecraftMergedJar, mergeTask);
 	}
 
 	public static void mergeJars(File clientJar, File serverJar, File mergedJar) throws IOException {

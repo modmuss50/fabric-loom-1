@@ -24,8 +24,6 @@
 
 package net.fabricmc.loom.api;
 
-import java.io.File;
-import java.util.List;
 import java.util.Map;
 
 import javax.inject.Inject;
@@ -123,8 +121,7 @@ public abstract class ModSettings implements Named {
 		if (projectPath.equals(getProject().getPath())) {
 			// Shortcut for source sets in our own project.
 			SourceSetReference ref = new SourceSetReference(SourceSetHelper.getSourceSetByName(sourceSetName, getProject()), getProject());
-			List<File> classpath = SourceSetHelper.getClasspath(ref, false);
-			getModFiles().from(classpath);
+			getModFiles().from(getProject().provider(() -> SourceSetHelper.getClasspath(ref, false)));
 			return;
 		}
 

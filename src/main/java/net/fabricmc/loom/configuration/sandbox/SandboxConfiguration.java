@@ -24,8 +24,9 @@
 
 package net.fabricmc.loom.configuration.sandbox;
 
-import java.nio.file.Path;
+import java.io.File;
 import java.util.Objects;
+import java.util.Set;
 
 import javax.inject.Inject;
 
@@ -34,11 +35,14 @@ import org.gradle.api.artifacts.Configuration;
 import org.gradle.api.artifacts.ExternalModuleDependency;
 import org.gradle.api.artifacts.dsl.DependencyFactory;
 import org.gradle.api.plugins.JavaPlugin;
+import org.gradle.api.provider.Provider;
+import org.gradle.api.tasks.TaskProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.api.RunConfiguration;
+import net.fabricmc.loom.task.LoomTasks;
 import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.Platform;
 import net.fabricmc.loom.util.gradle.GradleUtils;
@@ -50,6 +54,7 @@ import net.fabricmc.loom.util.gradle.GradleUtils;
  */
 public abstract class SandboxConfiguration implements Runnable {
 	private static final Logger LOGGER = LoggerFactory.getLogger(SandboxConfiguration.class);
+	private static final Set<String> IDE_RUN_CONFIG_TASKS = Set.of("ideaSyncTask", "genEclipseRuns", "vscode");
 
 	@Inject
 	protected abstract Project getProject();
@@ -78,18 +83,20 @@ public abstract class SandboxConfiguration implements Runnable {
 		final String sandboxNotation = (String) Objects.requireNonNull(getProject().findProperty(Constants.Properties.SANDBOX));
 		final LoomGradleExtension extension = LoomGradleExtension.get(getProject());
 		final ExternalModuleDependency dependency = getDependencyFactory().create(sandboxNotation);
-		final Configuration configuration = getProject().getConfigurations().detachedConfiguration(dependency);
-		final Path sandboxJar = configuration.getSingleFile().toPath();
-		final SandboxMetadata metadata = SandboxMetadata.readFromJar(sandboxJar);
-
-		if (!metadata.supportsPlatform(Platform.CURRENT)) {
-			LOGGER.info("Sandbox does not support the current platform");
-			return;
-		}
+		final Configuration configuration = getProject().getConfigurations().detachedConfiguration(dependency.copy());
+		final TaskProvider<ScanSandboxMetadataTask> scanTask = getProject().getTasks().register("scanFabricSandbox", ScanSandboxMetadataTask.class, task -> {
+			task.getSandboxClasspath().from(configuration);
+			task.getPlatformIdentity().set(platformIdentity());
+			task.getMainClassFile().set(new File(extension.getFiles().getProjectBuildCache(), "sandbox/main-class.txt"));
+		});
+		final Provider<String> sandboxMainClass = getProject().getProviders()
+				.fileContents(scanTask.flatMap(ScanSandboxMetadataTask::getMainClassFile))
+				.getAsText()
+				.map(String::strip);
 
 		getProject().getDependencies().add(JavaPlugin.RUNTIME_ONLY_CONFIGURATION_NAME, dependency);
 
-		extension.getRuns().create("clientSandbox", settings -> {
+		final RunConfiguration sandboxRun = extension.getRuns().create("clientSandbox", settings -> {
 			RunConfiguration clientRun = extension.getRuns().getByName("client");
 
 			settings.inherit(clientRun);
@@ -98,8 +105,20 @@ public abstract class SandboxConfiguration implements Runnable {
 
 			// The sandbox also acts as DLI
 			// Set the sandbox as the true main class
-			settings.getDevLaunchMainClass().set(metadata.mainClass());
-			settings.getSystemProperties().put("fabric.sandbox.realMain", clientRun.getMainClass().get());
+			settings.getDevLaunchMainClass().set(sandboxMainClass);
+			settings.getSystemProperties().put("fabric.sandbox.realMain", clientRun.getMainClass());
 		});
+
+		getProject().getTasks().named(LoomTasks.getRunConfigTaskName(sandboxRun)).configure(task -> task.dependsOn(scanTask));
+		getProject().getTasks().matching(task -> IDE_RUN_CONFIG_TASKS.contains(task.getName())).configureEach(task -> task.dependsOn(scanTask));
+	}
+
+	private static String platformIdentity() {
+		return "%s-%s-%s-%s".formatted(
+				Platform.CURRENT.getOperatingSystem(),
+				Platform.CURRENT.getArchitecture().is64Bit(),
+				Platform.CURRENT.getArchitecture().isArm(),
+				Platform.CURRENT.getArchitecture().isRiscV()
+		);
 	}
 }

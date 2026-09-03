@@ -26,6 +26,8 @@ package net.fabricmc.loom.build.mixin;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Locale;
@@ -102,6 +104,13 @@ public abstract class AnnotationProcessorInvoker<T extends Task> {
 			final File mixinMappings = getMixinMappingsForSourceSet(project, sourceSet);
 
 			task.getOutputs().file(mixinMappings).withPropertyName("mixin-ap-" + sourceSet.getName() + "-" + name).optional();
+			task.doFirst(ignored -> {
+				try {
+					Files.createDirectories(mixinMappings.toPath().getParent());
+				} catch (IOException e) {
+					throw new UncheckedIOException("Failed to create the Mixin annotation processor output directory", e);
+				}
+			});
 
 			String refmapTargetNamespace = loom.getMixin().getRefmapTargetNamespace().get();
 			String capitalizedTargetNamespace = refmapTargetNamespace.substring(0, 1).toUpperCase(Locale.ROOT) + refmapTargetNamespace.substring(1);

@@ -24,123 +24,148 @@
 
 package net.fabricmc.loom.configuration.providers.mappings;
 
-import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
-import java.io.Reader;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.FileSystem;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import org.apache.tools.ant.util.StringUtils;
 import org.gradle.api.Project;
+import org.gradle.api.artifacts.FileCollectionDependency;
+import org.gradle.api.artifacts.ModuleDependency;
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier;
+import org.gradle.api.file.FileCollection;
 import org.gradle.api.provider.Provider;
 import org.jspecify.annotations.Nullable;
 
-import net.fabricmc.loom.LoomGradleExtension;
-import net.fabricmc.loom.LoomGradlePlugin;
 import net.fabricmc.loom.api.decompilers.JavadocStyle;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.configuration.DependencyInfo;
-import net.fabricmc.loom.configuration.providers.mappings.tiny.MappingsMerger;
-import net.fabricmc.loom.configuration.providers.mappings.tiny.TinyJarInfo;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftTaskGraph;
+import net.fabricmc.loom.task.PrepareMinecraftMappingsTask;
 import net.fabricmc.loom.util.Checksum;
 import net.fabricmc.loom.util.Constants;
-import net.fabricmc.loom.util.DeletingFileVisitor;
-import net.fabricmc.loom.util.ZipUtils;
 import net.fabricmc.loom.util.service.ServiceFactory;
-import net.fabricmc.mappingio.MappingReader;
-import net.fabricmc.mappingio.format.MappingFormat;
 import net.fabricmc.mappingio.tree.MemoryMappingTree;
-import net.fabricmc.stitch.Command;
-import net.fabricmc.stitch.commands.CommandProposeFieldNames;
 
 public final class RemapMappingConfiguration extends MappingConfiguration {
-	private final ServiceFactory serviceFactory;
-	private final Path baseTinyMappings;
+	public static final String PREPARE_MAPPINGS_TASK = "prepareMinecraftMappings";
 	public final Path tinyMappings;
 	public final Path tinyMappingsJar;
-	@Nullable
-	private Map<String, String> signatureFixes;
 
-	private RemapMappingConfiguration(String mappingsIdentifier, Path mappingsWorkingDir, Path inputJar, ServiceFactory serviceFactory) {
-		super(mappingsIdentifier, inputJar);
-		this.serviceFactory = serviceFactory;
-		this.baseTinyMappings = mappingsWorkingDir.resolve("mappings-base.tiny");
+	private RemapMappingConfiguration(String mappingsIdentifier, Path mappingsWorkingDir) {
+		super(mappingsIdentifier, mappingsWorkingDir.resolve("mappings.jar"));
 		this.tinyMappings = mappingsWorkingDir.resolve("mappings.tiny");
 		this.tinyMappingsJar = mappingsWorkingDir.resolve("mappings.jar");
 	}
 
 	public static RemapMappingConfiguration create(Project project, ServiceFactory serviceFactory, DependencyInfo dependency, MinecraftProvider minecraftProvider) {
-		final String version = dependency.getResolvedVersion();
-		final Path inputJar = resolveInputJar(dependency, "mappings");
-		final String mappingsName = StringUtils.removeSuffix(dependency.getDependency().getGroup() + "." + dependency.getDependency().getName(), "-unmerged");
-		final TinyJarInfo jarInfo = readJarInfo(inputJar, dependency, minecraftProvider, "mappings");
-		final String mappingsIdentifier = createMappingsIdentifier(mappingsName, version, getMappingsClassifier(dependency, jarInfo.v2()), minecraftProvider.minecraftVersion());
-		final Path workingDir = minecraftProvider.dir(mappingsIdentifier).toPath();
-		var mappingConfiguration = new RemapMappingConfiguration(mappingsIdentifier, workingDir, inputJar, serviceFactory);
-
-		mappingConfiguration.setup(project, minecraftProvider, dependency, "mappings");
+		final String layeredIdentity = getLayeredIdentity(dependency);
+		final String version = layeredIdentity != null ? layeredIdentity : Objects.requireNonNullElse(dependency.getDependency().getVersion(), "unspecified");
+		final String mappingsName = layeredIdentity != null
+				? "loom.layered"
+				: StringUtils.removeSuffix(dependency.getDependency().getGroup() + "." + dependency.getDependency().getName(), "-unmerged");
+		final String mappingsIdentifier = createMappingsIdentifier(mappingsName, version, getDeclaredClassifier(dependency), minecraftProvider.minecraftVersion());
+		final Path workingDir = minecraftProvider.file(mappingsIdentifier).toPath();
+		final var mappingConfiguration = new RemapMappingConfiguration(mappingsIdentifier, workingDir);
+		mappingConfiguration.registerPreparationTask(project, dependency, minecraftProvider);
 		return mappingConfiguration;
 	}
 
-	@Override
-	protected void prepare(MinecraftProvider minecraftProvider) throws IOException {
-		if (minecraftProvider.refreshDeps()) {
-			cleanup();
+	@Nullable
+	private static String getLayeredIdentity(DependencyInfo dependency) {
+		if (!(dependency.getDependency() instanceof FileCollectionDependency)) {
+			return null;
 		}
 
-		Files.createDirectories(tinyMappings.getParent());
+		final String reason = dependency.getDependency().getReason();
+		return reason != null && reason.startsWith(LayeredMappingsFactory.DEPENDENCY_REASON_PREFIX)
+				? reason.substring(LayeredMappingsFactory.DEPENDENCY_REASON_PREFIX.length())
+				: null;
 	}
 
-	@Override
-	protected void cleanup() throws IOException {
-		if (Files.exists(tinyMappings.getParent())) {
-			Files.walkFileTree(tinyMappings.getParent(), new DeletingFileVisitor());
-		}
-	}
+	private void registerPreparationTask(Project project, DependencyInfo dependency, MinecraftProvider minecraftProvider) {
+		final boolean useIntermediateMappings = net.fabricmc.loom.LoomGradleExtension.get(project).getUseIntermediateMappings().get();
+		final Path intermediaryMappings = useIntermediateMappings
+				? IntermediateMappingsService.registerPreparationTask(project, minecraftProvider)
+				: null;
+		final var prepareTask = project.getTasks().register(PREPARE_MAPPINGS_TASK, PrepareMinecraftMappingsTask.class, task -> {
+			task.setDescription("Prepares the configured Minecraft mappings.");
+			task.setGroup(Constants.TaskGroup.FABRIC);
+			task.getMappingsJar().fileProvider(resolveMappingsJar(project, dependency));
 
-	@Override
-	protected void setupMappings(Project project, MinecraftProvider minecraftProvider, FileSystem inputJar) throws IOException {
-		extractSignatureFixes(inputJar);
-
-		if (Files.notExists(tinyMappings) || minecraftProvider.refreshDeps()) {
-			TinyJarInfo.extractMappings(inputJar, baseTinyMappings);
-			storeMappings(project, minecraftProvider);
-		}
-
-		if (Files.notExists(tinyMappingsJar) || minecraftProvider.refreshDeps()) {
-			Files.deleteIfExists(tinyMappingsJar);
-			ZipUtils.add(tinyMappingsJar, TinyJarInfo.MAPPINGS_PATH, Files.readAllBytes(tinyMappings));
-		}
-	}
-
-	private void storeMappings(Project project, MinecraftProvider minecraftProvider) throws IOException {
-		if (areMappingsV2(baseTinyMappings)) {
-			final LoomGradleExtension extension = LoomGradleExtension.get(project);
-
-			if (extension.getUseIntermediateMappings().get()) {
-				IntermediateMappingsService intermediateMappingsService = serviceFactory.get(IntermediateMappingsService.createOptions(project, minecraftProvider));
-				MappingsMerger.mergeAndSaveMappings(baseTinyMappings, tinyMappings, minecraftProvider, intermediateMappingsService);
-			} else {
-				Files.copy(baseTinyMappings, tinyMappings, StandardCopyOption.REPLACE_EXISTING);
+			if (intermediaryMappings != null) {
+				task.getIntermediaryMappings().fileValue(intermediaryMappings.toFile());
 			}
+
+			final var minecraftJars = minecraftProvider.getMinecraftJars();
+
+			if (minecraftJars.size() == 1) {
+				task.getOfficialMinecraftJar().fileValue(minecraftJars.getFirst().toFile());
+			}
+
+			task.getMinecraftMetadata().fileValue(minecraftProvider.getMinecraftMetadataPath().toFile());
+			task.getUseIntermediateMappings().set(useIntermediateMappings);
+			task.getOutputMappings().fileValue(tinyMappings.toFile());
+			task.getOutputMappingsJar().fileValue(tinyMappingsJar.toFile());
+		});
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(project);
+		taskGraph.dependsOn(prepareTask, minecraftProvider.getMinecraftMetadataPath());
+
+		if (intermediaryMappings != null) {
+			taskGraph.dependsOn(prepareTask, intermediaryMappings);
+		}
+
+		final var minecraftJars = minecraftProvider.getMinecraftJars();
+
+		if (minecraftJars.size() == 1 && taskGraph.hasProducer(minecraftJars.getFirst())) {
+			taskGraph.dependsOn(prepareTask, minecraftJars.getFirst());
+		}
+
+		taskGraph.registerOutput(tinyMappings, prepareTask);
+		taskGraph.registerOutput(tinyMappingsJar, prepareTask);
+	}
+
+	private static Provider<File> resolveMappingsJar(Project project, DependencyInfo dependency) {
+		final FileCollection files;
+		final String dependencyNotation = dependency.getDepString();
+
+		if (dependency.getDependency() instanceof FileCollectionDependency fileDependency) {
+			files = fileDependency.getFiles();
 		} else {
-			final List<Path> minecraftJars = minecraftProvider.getMinecraftJars();
+			final String group = dependency.getDependency().getGroup();
+			final String name = dependency.getDependency().getName();
+			files = dependency.getSourceConfiguration().getIncoming().artifactView(view -> view.componentFilter(identifier ->
+					identifier instanceof ModuleComponentIdentifier moduleIdentifier
+							&& Objects.equals(group, moduleIdentifier.getGroup())
+							&& name.equals(moduleIdentifier.getModule())
+			)).getFiles();
+		}
 
-			if (minecraftJars.size() != 1) {
-				throw new UnsupportedOperationException("V1 mappings only support single jar minecraft providers");
+		return files.getElements().map(elements -> {
+			if (elements.size() != 1) {
+				throw new IllegalStateException("Expected exactly one mappings artifact for " + dependencyNotation + ", but found " + elements.size());
 			}
 
-			Files.deleteIfExists(tinyMappings);
-			LOGGER.info(":populating field names");
-			suggestFieldNames(minecraftJars.get(0), baseTinyMappings, tinyMappings);
+			return elements.iterator().next().getAsFile();
+		});
+	}
+
+	private static String getDeclaredClassifier(DependencyInfo dependency) {
+		if (!(dependency.getDependency() instanceof ModuleDependency moduleDependency)) {
+			return "";
 		}
+
+		return moduleDependency.getArtifacts().stream()
+				.map(artifact -> artifact.getClassifier())
+				.filter(Objects::nonNull)
+				.filter(classifier -> !classifier.isEmpty())
+				.findFirst()
+				.map(classifier -> "-" + classifier)
+				.orElse("");
 	}
 
 	private static void validateMappings(MemoryMappingTree mappingTree) throws IOException {
@@ -169,7 +194,7 @@ public final class RemapMappingConfiguration extends MappingConfiguration {
 
 	@Override
 	public String getMappingsHash() {
-		return Checksum.of(tinyMappings).sha256().hex();
+		return Checksum.of(mappingsIdentifier()).sha256().hex();
 	}
 
 	@Override
@@ -185,44 +210,11 @@ public final class RemapMappingConfiguration extends MappingConfiguration {
 	@Override
 	public void applyToProject(Project project, DependencyInfo dependency) {
 		super.applyToProject(project, dependency);
-		project.getDependencies().add(Constants.Configurations.MAPPINGS_FINAL, project.files(tinyMappingsJar.toFile()));
-	}
-
-	private void extractSignatureFixes(FileSystem inputJar) throws IOException {
-		Path recordSignaturesJsonPath = inputJar.getPath("extras/record_signatures.json");
-
-		if (!Files.exists(recordSignaturesJsonPath)) {
-			return;
-		}
-
-		try (Reader reader = Files.newBufferedReader(recordSignaturesJsonPath, StandardCharsets.UTF_8)) {
-			//noinspection unchecked
-			signatureFixes = LoomGradlePlugin.GSON.fromJson(reader, Map.class);
-		}
+		project.getDependencies().add(Constants.Configurations.MAPPINGS_FINAL, MinecraftTaskGraph.get(project).files(tinyMappingsJar));
 	}
 
 	@Nullable
 	public Map<String, String> getSignatureFixes() {
-		return signatureFixes;
-	}
-
-	private static boolean areMappingsV2(Path path) throws IOException {
-		try (BufferedReader reader = Files.newBufferedReader(path)) {
-			return MappingReader.detectFormat(reader) == MappingFormat.TINY_2_FILE;
-		}
-	}
-
-	private static void suggestFieldNames(Path inputJar, Path oldMappings, Path newMappings) {
-		Command command = new CommandProposeFieldNames();
-
-		try {
-			command.run(new String[] {
-					inputJar.toFile().getAbsolutePath(),
-					oldMappings.toAbsolutePath().toString(),
-					newMappings.toAbsolutePath().toString()
-			});
-		} catch (Exception e) {
-			throw new RuntimeException(e);
-		}
+		return null;
 	}
 }

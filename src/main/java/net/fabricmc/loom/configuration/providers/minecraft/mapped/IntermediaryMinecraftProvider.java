@@ -27,16 +27,19 @@ package net.fabricmc.loom.configuration.providers.minecraft.mapped;
 import java.util.List;
 
 import org.gradle.api.Project;
+import org.gradle.api.tasks.TaskProvider;
 
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.configuration.providers.minecraft.LegacyMergedMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MergedMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJar;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftTaskGraph;
 import net.fabricmc.loom.configuration.providers.minecraft.SingleJarEnvType;
 import net.fabricmc.loom.configuration.providers.minecraft.SingleJarMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.SplitMinecraftProvider;
-import net.fabricmc.tinyremapper.TinyRemapper;
+import net.fabricmc.loom.task.MergeMinecraftJarsTask;
+import net.fabricmc.loom.util.Constants;
 
 public abstract sealed class IntermediaryMinecraftProvider<M extends MinecraftProvider> extends AbstractMappedMinecraftProvider<M> permits IntermediaryMinecraftProvider.MergedImpl, IntermediaryMinecraftProvider.LegacyMergedImpl, IntermediaryMinecraftProvider.SingleJarImpl, IntermediaryMinecraftProvider.SplitImpl {
 	public IntermediaryMinecraftProvider(Project project, M minecraftProvider) {
@@ -50,11 +53,6 @@ public abstract sealed class IntermediaryMinecraftProvider<M extends MinecraftPr
 	@Override
 	public final MappingsNamespace getTargetNamespace() {
 		return MappingsNamespace.INTERMEDIARY;
-	}
-
-	@Override
-	public MavenScope getMavenScope() {
-		return MavenScope.GLOBAL;
 	}
 
 	@Override
@@ -90,26 +88,21 @@ public abstract sealed class IntermediaryMinecraftProvider<M extends MinecraftPr
 		public List<MinecraftJar> provide(ProvideContext context) throws Exception {
 			final List<MinecraftJar> minecraftJars = List.of(getMergedJar());
 
-			// this check must be done before the client and server impls are provided
-			// because the merging only needs to happen if the remapping step is run
-			final boolean refreshOutputs = client.shouldRefreshOutputs(context)
-					|| server.shouldRefreshOutputs(context)
-					|| this.shouldRefreshOutputs(context);
-
 			// Map the client and server jars separately
 			server.provide(context);
 			client.provide(context);
 
-			if (refreshOutputs) {
-				// then merge them
-				MergedMinecraftProvider.mergeJars(
-							client.getEnvOnlyJar().toFile(),
-							server.getEnvOnlyJar().toFile(),
-							getMergedJar().toFile()
-				);
-
-				createBackupJars(minecraftJars);
-			}
+			final MinecraftJar mergedJar = getMergedJar();
+			final TaskProvider<MergeMinecraftJarsTask> mergeTask = getProject().getTasks().register("mergeLegacyMinecraftJarsToIntermediary", MergeMinecraftJarsTask.class, task -> {
+				task.setDescription("Merges the legacy intermediary Minecraft client and server jars.");
+				task.setGroup(Constants.TaskGroup.FABRIC);
+				task.getClientJar().fileValue(client.getEnvOnlyJar().toFile());
+				task.getServerJar().fileValue(server.getEnvOnlyJar().toFile());
+				task.getOutputJar().fileValue(mergedJar.toFile());
+			});
+			final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(getProject());
+			taskGraph.dependsOn(mergeTask, client.getEnvOnlyJar().getPath(), server.getEnvOnlyJar().getPath());
+			taskGraph.registerOutput(mergedJar.getPath(), mergeTask);
 
 			return minecraftJars;
 		}
@@ -144,11 +137,6 @@ public abstract sealed class IntermediaryMinecraftProvider<M extends MinecraftPr
 				new RemappedJars(minecraftProvider.getMinecraftCommonJar(), getCommonJar(), minecraftProvider.getOfficialNamespace()),
 				new RemappedJars(minecraftProvider.getMinecraftClientOnlyJar(), getClientOnlyJar(), minecraftProvider.getOfficialNamespace(), minecraftProvider.getMinecraftCommonJar())
 			);
-		}
-
-		@Override
-		protected void configureRemapper(RemappedJars remappedJars, TinyRemapper.Builder tinyRemapperBuilder) {
-			configureSplitRemapper(remappedJars, tinyRemapperBuilder);
 		}
 	}
 

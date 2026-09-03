@@ -24,47 +24,34 @@
 
 package net.fabricmc.loom.configuration.providers.minecraft.mapped;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.StringJoiner;
-import java.util.function.Function;
 
 import org.gradle.api.Project;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.gradle.api.Task;
+import org.gradle.api.tasks.TaskProvider;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.configuration.ConfigContext;
-import net.fabricmc.loom.configuration.mods.dependency.LocalMavenHelper;
 import net.fabricmc.loom.configuration.providers.mappings.IntermediaryMappingsProvider;
 import net.fabricmc.loom.configuration.providers.mappings.MappingConfiguration;
+import net.fabricmc.loom.configuration.providers.mappings.NoRemapMappingConfiguration;
 import net.fabricmc.loom.configuration.providers.mappings.RemapMappingConfiguration;
-import net.fabricmc.loom.configuration.providers.mappings.extras.annotations.AnnotationsData;
-import net.fabricmc.loom.configuration.providers.minecraft.AnnotationsApplyVisitor;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJar;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftSourceSets;
-import net.fabricmc.loom.configuration.providers.minecraft.MinecraftVersionMeta;
-import net.fabricmc.loom.configuration.providers.minecraft.SignatureFixerApplyVisitor;
-import net.fabricmc.loom.extension.LoomFiles;
-import net.fabricmc.loom.util.SidedClassVisitor;
-import net.fabricmc.loom.util.TinyRemapperHelper;
-import net.fabricmc.loom.util.ZipUtils;
-import net.fabricmc.tinyremapper.OutputConsumerPath;
-import net.fabricmc.tinyremapper.TinyRemapper;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftTaskGraph;
+import net.fabricmc.loom.configuration.providers.minecraft.SingleJarMinecraftProvider;
+import net.fabricmc.loom.task.ApplyMinecraftAnnotationsTask;
+import net.fabricmc.loom.task.ProcessMinecraftJarTask;
+import net.fabricmc.loom.task.RemapMinecraftJarTask;
+import net.fabricmc.loom.util.Constants;
 
 public abstract class AbstractMappedMinecraftProvider<M extends MinecraftProvider> implements MappedMinecraftProvider.ProviderImpl {
-	private static final Logger LOGGER = LoggerFactory.getLogger(AbstractMappedMinecraftProvider.class);
-
 	protected final M minecraftProvider;
 	private final Project project;
 	protected final LoomGradleExtension extension;
@@ -104,29 +91,120 @@ public abstract class AbstractMappedMinecraftProvider<M extends MinecraftProvide
 			throw new IllegalStateException("No remapped jars provided");
 		}
 
-		if (shouldRefreshOutputs(context)) {
-			try {
-				remapInputs(remappedJars, context.configContext());
-				createBackupJars(minecraftJars);
-			} catch (Throwable t) {
-				cleanOutputs(remappedJars);
-
-				throw new RuntimeException("Failed to remap minecraft", t);
-			}
-		}
+		registerRemapTasks(remappedJars);
 
 		if (context.applyDependencies()) {
 			final List<MinecraftJar.Type> dependencyTargets = getDependencyTypes();
 
 			if (!dependencyTargets.isEmpty()) {
+				final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(getProject());
 				MinecraftSourceSets.get(getProject()).applyDependencies(
-						(configuration, type) -> getProject().getDependencies().add(configuration, getDependencyNotation(type)),
+						(configuration, type) -> getProject().getDependencies().add(configuration, taskGraph.files(getJar(type))),
 						dependencyTargets
 				);
 			}
 		}
 
 		return minecraftJars;
+	}
+
+	private void registerRemapTasks(List<RemappedJars> remappedJars) {
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(getProject());
+		final List<Path> mappingsRemapClasspath = !extension.disableObfuscation() && getTargetNamespace() == MappingsNamespace.NAMED
+				? extension.getMinecraftJars(MappingsNamespace.INTERMEDIARY)
+				: List.of();
+
+		for (RemappedJars remappedJar : remappedJars) {
+			final String taskSuffix = taskSuffix(remappedJar.type()) + "To" + taskSuffix(getTargetNamespace().toString());
+			final TaskProvider<? extends Task> remapTask;
+			final MappingConfiguration mappingConfiguration = extension.getMappingConfigurationOrNull();
+
+			if (extension.disableObfuscation() && mappingConfiguration instanceof NoRemapMappingConfiguration annotations) {
+				remapTask = getProject().getTasks().register("annotateMinecraft" + taskSuffix, ApplyMinecraftAnnotationsTask.class, task -> {
+					task.setDescription("Applies annotations to the %s Minecraft jar.".formatted(remappedJar.name()));
+					task.setGroup(Constants.TaskGroup.FABRIC);
+					task.getInputJar().fileValue(remappedJar.inputJar().toFile());
+					task.getAnnotationsJar().fileValue(annotations.getInputJar().toFile());
+					task.getOutputJar().fileValue(remappedJar.outputJarPath().toFile());
+				});
+			} else if (extension.disableObfuscation()) {
+				remapTask = getProject().getTasks().register("copyMinecraft" + taskSuffix, ProcessMinecraftJarTask.class, task -> {
+					task.setDescription("Copies the %s Minecraft jar to %s.".formatted(remappedJar.name(), getTargetNamespace()));
+					task.setGroup(Constants.TaskGroup.FABRIC);
+					task.getInputJar().fileValue(remappedJar.inputJar().toFile());
+					task.getOutputJar().fileValue(remappedJar.outputJarPath().toFile());
+				});
+			} else {
+				final RemapMappingConfiguration remapMappingConfiguration = extension.getMappingConfiguration();
+				remapTask = getProject().getTasks().register("remapMinecraft" + taskSuffix, RemapMinecraftJarTask.class, task -> {
+					task.setDescription("Remaps the %s Minecraft jar to %s.".formatted(remappedJar.name(), getTargetNamespace()));
+					task.setGroup(Constants.TaskGroup.FABRIC);
+					task.getInputJar().fileValue(remappedJar.inputJar().toFile());
+					task.getMappingsFile().fileValue(remapMappingConfiguration.tinyMappings.toFile());
+					task.getMappingsExtrasJar().fileValue(remapMappingConfiguration.tinyMappingsJar.toFile());
+					task.getMinecraftMetadata().fileValue(minecraftProvider.getMinecraftMetadataPath().toFile());
+					task.getRemapClasspath().from(List.of(remappedJar.remapClasspath()).stream().map(Path::toFile).toList());
+					task.getMappingsRemapClasspath().from(mappingsRemapClasspath.stream().map(Path::toFile).toList());
+					task.getSourceNamespace().set(remappedJar.sourceNamespace().toString());
+
+					if (minecraftProvider instanceof SingleJarMinecraftProvider singleJarMinecraftProvider) {
+						task.getLegacySourceNamespace().set(singleJarMinecraftProvider.getLegacyOfficialNamespace().toString());
+					}
+
+					task.getTargetNamespace().set(getTargetNamespace().toString());
+					task.getApplyClientOnlyAnnotation().set(remappedJar.outputJar().getType() == MinecraftJar.Type.CLIENT_ONLY);
+					task.getKnownIndyBsms().set(extension.getKnownIndyBsms());
+					task.getOutputJar().fileValue(remappedJar.outputJarPath().toFile());
+				});
+			}
+
+			taskGraph.dependsOn(remapTask, remappedJar.inputJar());
+
+			if (mappingConfiguration instanceof NoRemapMappingConfiguration) {
+				taskGraph.dependsOn(remapTask, mappingConfiguration.getInputJar());
+			}
+
+			if (!extension.disableObfuscation()) {
+				final RemapMappingConfiguration remapMappingConfiguration = extension.getMappingConfiguration();
+				taskGraph.dependsOn(
+						remapTask,
+						remapMappingConfiguration.tinyMappings,
+						remapMappingConfiguration.tinyMappingsJar,
+						minecraftProvider.getMinecraftMetadataPath()
+				);
+			}
+
+			for (Path classpath : remappedJar.remapClasspath()) {
+				if (taskGraph.hasProducer(classpath)) {
+					taskGraph.dependsOn(remapTask, classpath);
+				}
+			}
+
+			for (Path classpath : mappingsRemapClasspath) {
+				if (taskGraph.hasProducer(classpath)) {
+					taskGraph.dependsOn(remapTask, classpath);
+				}
+			}
+
+			taskGraph.registerOutput(remappedJar.outputJarPath(), remapTask);
+
+			if (requiresBackupJars()) {
+				final Path backupPath = getBackupJarPath(remappedJar.outputJar());
+				final TaskProvider<ProcessMinecraftJarTask> backupTask = getProject().getTasks().register("backupMinecraft" + taskSuffix, ProcessMinecraftJarTask.class, task -> {
+					task.setDescription("Backs up the %s Minecraft jar.".formatted(remappedJar.name()));
+					task.setGroup(Constants.TaskGroup.FABRIC);
+					task.getInputJar().fileValue(remappedJar.outputJarPath().toFile());
+					task.getOutputJar().fileValue(backupPath.toFile());
+				});
+				taskGraph.dependsOn(backupTask, remappedJar.outputJarPath());
+				taskGraph.registerOutput(backupPath, backupTask);
+			}
+		}
+	}
+
+	private static String taskSuffix(Object value) {
+		final String string = value.toString();
+		return Character.toUpperCase(string.charAt(0)) + string.substring(1);
 	}
 
 	// Create two copies of the remapped jar, the backup jar is used as the input of genSources
@@ -139,16 +217,6 @@ public abstract class AbstractMappedMinecraftProvider<M extends MinecraftProvide
 		return true;
 	}
 
-	protected void createBackupJars(List<MinecraftJar> minecraftJars) throws IOException {
-		if (!requiresBackupJars()) {
-			return;
-		}
-
-		for (MinecraftJar minecraftJar : minecraftJars) {
-			Files.copy(minecraftJar.getPath(), getBackupJarPath(minecraftJar), StandardCopyOption.REPLACE_EXISTING);
-		}
-	}
-
 	public record ProvideContext(boolean applyDependencies, boolean refreshOutputs, ConfigContext configContext) {
 		ProvideContext withApplyDependencies(boolean applyDependencies) {
 			return new ProvideContext(applyDependencies, refreshOutputs(), configContext());
@@ -157,30 +225,12 @@ public abstract class AbstractMappedMinecraftProvider<M extends MinecraftProvide
 
 	@Override
 	public Path getJar(MinecraftJar.Type type) {
-		return getMavenHelper(type).getOutputFile(null);
-	}
-
-	public enum MavenScope {
-		// Output files will be stored per project
-		LOCAL(LoomFiles::getLocalMinecraftRepo),
-		// Output files will be stored globally
-		GLOBAL(LoomFiles::getGlobalMinecraftRepo);
-
-		private final Function<LoomFiles, File> fileFunction;
-
-		MavenScope(Function<LoomFiles, File> fileFunction) {
-			this.fileFunction = fileFunction;
-		}
-
-		public Path getRoot(LoomGradleExtension extension) {
-			return fileFunction.apply(extension.getFiles()).toPath();
-		}
-	}
-
-	public abstract MavenScope getMavenScope();
-
-	public LocalMavenHelper getMavenHelper(MinecraftJar.Type type) {
-		return new LocalMavenHelper("net.minecraft", getName(type), getVersion(), null, getMavenScope().getRoot(extension));
+		return extension.getFiles().getProjectPersistentCache().toPath()
+				.resolve("minecraft")
+				.resolve("mapped")
+				.resolve(getVersion())
+				.resolve(getName(type))
+				.resolve("minecraft-%s.jar".formatted(type));
 	}
 
 	protected String getName(MinecraftJar.Type type) {
@@ -218,143 +268,6 @@ public abstract class AbstractMappedMinecraftProvider<M extends MinecraftProvide
 		}
 
 		return "%s-%s".formatted(extension.getMinecraftProvider().minecraftVersion(), extension.getMappingConfiguration().mappingsIdentifier());
-	}
-
-	protected String getDependencyNotation(MinecraftJar.Type type) {
-		return "net.minecraft:%s:%s".formatted(getName(type), getVersion());
-	}
-
-	protected boolean shouldRefreshOutputs(ProvideContext context) {
-		if (context.refreshOutputs()) {
-			LOGGER.info("Refreshing outputs for mapped jar, as refresh outputs was requested");
-			return true;
-		}
-
-		final List<? extends OutputJar> outputJars = getOutputJars();
-
-		if (outputJars.isEmpty()) {
-			throw new IllegalStateException("No output jars provided");
-		}
-
-		for (OutputJar outputJar : outputJars) {
-			if (!getMavenHelper(outputJar.type()).exists(null)) {
-				LOGGER.info("Refreshing outputs for mapped jar, as {} does not exist", outputJar.outputJar());
-				return true;
-			}
-		}
-
-		if (requiresBackupJars()) {
-			for (OutputJar outputJar : outputJars) {
-				if (!Files.exists(getBackupJarPath(outputJar.outputJar()))) {
-					LOGGER.info("Refreshing outputs for mapped jar, as backup jar does not exist for {}", outputJar.outputJar());
-					return true;
-				}
-			}
-		}
-
-		LOGGER.debug("All outputs are up to date");
-		return false;
-	}
-
-	private void remapInputs(List<RemappedJars> remappedJars, ConfigContext configContext) throws IOException {
-		cleanOutputs(remappedJars);
-
-		for (RemappedJars remappedJar : remappedJars) {
-			remapJar(remappedJar, configContext);
-		}
-	}
-
-	protected void remapJar(RemappedJars remappedJars, ConfigContext configContext) throws IOException {
-		if (extension.disableObfuscation()) {
-			Files.createDirectories(remappedJars.outputJarPath().getParent());
-			Files.copy(remappedJars.inputJar(), remappedJars.outputJarPath(), StandardCopyOption.REPLACE_EXISTING);
-
-			MappingConfiguration mappingConfiguration = extension.getMappingConfigurationOrNull();
-
-			if (mappingConfiguration != null) {
-				AnnotationsData annotationsData = AnnotationsData.getRemappedAnnotations(
-						MappingsNamespace.OFFICIAL,
-						mappingConfiguration,
-						getProject(),
-						configContext.serviceFactory(),
-						MappingsNamespace.OFFICIAL.toString()
-				);
-
-				if (annotationsData != null) {
-					applyAnnotations(remappedJars.outputJarPath(), annotationsData);
-				}
-			}
-
-			getMavenHelper(remappedJars.type()).savePom();
-			return;
-		}
-
-		final RemapMappingConfiguration mappingConfiguration = extension.getMappingConfiguration();
-		final String fromM = remappedJars.sourceNamespace().toString();
-		final String toM = getTargetNamespace().toString();
-
-		Files.deleteIfExists(remappedJars.outputJarPath());
-
-		final AnnotationsData remappedAnnotations = AnnotationsData.getRemappedAnnotations(getTargetNamespace(), mappingConfiguration, getProject(), configContext.serviceFactory(), toM);
-		final Map<String, String> remappedSignatures = SignatureFixerApplyVisitor.getRemappedSignatures(getTargetNamespace() == MappingsNamespace.INTERMEDIARY, mappingConfiguration, getProject(), configContext.serviceFactory(), toM);
-		final MinecraftVersionMeta.JavaVersion javaVersion = minecraftProvider.getVersionInfo().javaVersion();
-		final boolean fixRecords = javaVersion != null && javaVersion.majorVersion() >= 16;
-
-		TinyRemapper remapper = TinyRemapperHelper.getTinyRemapper(getProject(), configContext.serviceFactory(), fromM, toM, fixRecords, (builder) -> {
-			if (remappedAnnotations != null) {
-				builder.extraPostApplyVisitor(new AnnotationsApplyVisitor(remappedAnnotations));
-			}
-
-			builder.extraPostApplyVisitor(new SignatureFixerApplyVisitor(remappedSignatures));
-			configureRemapper(remappedJars, builder);
-		});
-
-		try (OutputConsumerPath outputConsumer = new OutputConsumerPath.Builder(remappedJars.outputJarPath()).build()) {
-			outputConsumer.addNonClassFiles(remappedJars.inputJar());
-
-			for (Path path : remappedJars.remapClasspath()) {
-				remapper.readClassPath(path);
-			}
-
-			remapper.readInputs(remappedJars.inputJar());
-			remapper.apply(outputConsumer);
-		} catch (Exception e) {
-			throw new RuntimeException("Failed to remap JAR " + remappedJars.inputJar() + " with mappings from " + mappingConfiguration.tinyMappings, e);
-		} finally {
-			remapper.finish();
-		}
-
-		getMavenHelper(remappedJars.type()).savePom();
-	}
-
-	private static void applyAnnotations(Path jar, AnnotationsData annotationsData) throws IOException {
-		Map<String, ZipUtils.UnsafeUnaryOperator<byte[]>> transforms = new HashMap<>();
-		annotationsData.classes().forEach((className, classData) -> transforms.put(
-				className + ".class",
-				(ZipUtils.AsmClassOperator) classVisitor -> new AnnotationsApplyVisitor.AnnotationsApplyClassVisitor(classVisitor, classData)
-		));
-		ZipUtils.transform(jar, transforms);
-	}
-
-	protected void configureRemapper(RemappedJars remappedJars, TinyRemapper.Builder tinyRemapperBuilder) {
-	}
-
-	// Configure the remapper to add the client @Environment annotation to all classes in the client jar.
-	public static void configureSplitRemapper(RemappedJars remappedJars, TinyRemapper.Builder tinyRemapperBuilder) {
-		final MinecraftJar outputJar = remappedJars.outputJar();
-		assert !outputJar.isMerged();
-
-		if (outputJar.includesClient()) {
-			assert !outputJar.includesServer();
-			tinyRemapperBuilder.extraPostApplyVisitor(SidedClassVisitor.CLIENT);
-		}
-	}
-
-	private void cleanOutputs(List<RemappedJars> remappedJars) throws IOException {
-		for (RemappedJars remappedJar : remappedJars) {
-			Files.deleteIfExists(remappedJar.outputJarPath());
-			Files.deleteIfExists(getBackupJarPath(remappedJar.outputJar()));
-		}
 	}
 
 	public Project getProject() {

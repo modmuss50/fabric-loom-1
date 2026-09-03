@@ -65,6 +65,27 @@ class DataGenerationTest extends Specification implements GradleProjectTestTrait
 		version << STANDARD_TEST_VERSIONS
 	}
 
+	def "fabric api source set does not require mod metadata during configuration"() {
+		setup:
+		def gradle = gradleProject(project: "minimalBase", version: PRE_RELEASE_GRADLE)
+		gradle.buildGradle << '''
+                fabricApi {
+                    configureTests {
+                        createSourceSet = true
+                    }
+                }
+            ''' + DEPENDENCIES
+
+		when:
+		def result1 = gradle.run(task: "help")
+		def result2 = gradle.run(task: "help")
+
+		then:
+		result1.task(":help").outcome == SUCCESS
+		result2.task(":help").outcome == SUCCESS
+		result2.output.contains("Reusing configuration cache.")
+	}
+
 	@Unroll
 	def "dataGeneration sourceset (gradle #version)"() {
 		setup:

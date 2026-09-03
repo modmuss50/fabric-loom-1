@@ -35,6 +35,10 @@ import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.tasks.OutputFile;
 import org.gradle.api.tasks.TaskAction;
 import org.gradle.work.DisableCachingByDefault;
+import org.gradle.workers.WorkAction;
+import org.gradle.workers.WorkParameters;
+import org.gradle.workers.WorkQueue;
+import org.gradle.workers.WorkerExecutor;
 
 import net.fabricmc.loom.task.AbstractLoomTask;
 
@@ -44,19 +48,35 @@ public abstract class GenerateLog4jConfigTask extends AbstractLoomTask {
 	public abstract RegularFileProperty getOutputFile();
 
 	@Inject
+	protected abstract WorkerExecutor getWorkerExecutor();
+
+	@Inject
 	public GenerateLog4jConfigTask() {
 		getOutputFile().set(getExtension().getFiles().getDefaultLog4jConfigFile());
 	}
 
 	@TaskAction
 	public void run() {
-		Path outputFile = getOutputFile().get().getAsFile().toPath();
+		final WorkQueue workQueue = getWorkerExecutor().noIsolation();
+		workQueue.submit(GenerateLog4jConfigAction.class, parameters -> parameters.getOutputFile().set(getOutputFile()));
+	}
 
-		try (InputStream is = GenerateLog4jConfigTask.class.getClassLoader().getResourceAsStream("log4j2.fabric.xml")) {
-			Files.deleteIfExists(outputFile);
-			Files.copy(is, outputFile);
-		} catch (IOException e) {
-			throw new RuntimeException("Failed to generate log4j config", e);
+	public interface Parameters extends WorkParameters {
+		RegularFileProperty getOutputFile();
+	}
+
+	public abstract static class GenerateLog4jConfigAction implements WorkAction<Parameters> {
+		@Override
+		public void execute() {
+			final Path outputFile = getParameters().getOutputFile().get().getAsFile().toPath();
+
+			try (InputStream is = GenerateLog4jConfigTask.class.getClassLoader().getResourceAsStream("log4j2.fabric.xml")) {
+				Files.createDirectories(outputFile.getParent());
+				Files.deleteIfExists(outputFile);
+				Files.copy(is, outputFile);
+			} catch (IOException e) {
+				throw new RuntimeException("Failed to generate log4j config", e);
+			}
 		}
 	}
 }

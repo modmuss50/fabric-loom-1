@@ -36,6 +36,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -146,6 +149,42 @@ public final class Download {
 	}
 
 	DownloadResult downloadPath(Path output) throws DownloadException {
+		final Path normalizedOutput = output.toAbsolutePath().normalize();
+		final Path parent = normalizedOutput.getParent();
+
+		try {
+			if (parent != null) {
+				Files.createDirectories(parent);
+			}
+
+			final Path coordinationLock = normalizedOutput.resolveSibling(normalizedOutput.getFileName() + ".loom.download.lock");
+
+			try (FileChannel channel = FileChannel.open(coordinationLock, StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+				while (true) {
+					try {
+						final FileLock lock = channel.tryLock();
+
+						if (lock != null) {
+							try (lock) {
+								return downloadPathLocked(normalizedOutput);
+							}
+						}
+					} catch (OverlappingFileLockException ignored) {
+						// Another downloader in this JVM owns the file lock.
+					}
+
+					Thread.sleep(10);
+				}
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw error(e, "Interrupted while waiting to download (%s)", normalizedOutput);
+		} catch (IOException e) {
+			throw error(e, "Failed to lock download destination (%s)", normalizedOutput);
+		}
+	}
+
+	private DownloadResult downloadPathLocked(Path output) throws DownloadException {
 		boolean downloadRequired = requiresDownload(output);
 
 		if (!downloadRequired) {

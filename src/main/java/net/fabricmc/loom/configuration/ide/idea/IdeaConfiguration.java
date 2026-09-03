@@ -42,17 +42,11 @@ public abstract class IdeaConfiguration implements Runnable {
 	protected abstract Project getProject();
 
 	public void run() {
-		final boolean taskBasedMinecraft = TaskBasedMinecraftConfiguration.isEnabled(getProject());
-
 		getProject().getTasks().register("ideaSyncTask", IdeaSyncTask.class, task -> {
-			if (taskBasedMinecraft) {
-				task.dependsOn(TaskBasedMinecraftConfiguration.PROCESS_MINECRAFT_JARS_TASK);
-			}
+			task.dependsOn(TaskBasedMinecraftConfiguration.PROCESS_MINECRAFT_JARS_TASK);
 
 			if (LoomGradleExtension.get(getProject()).getRunConfigs().stream().anyMatch(config -> config.getGenerateRunConfig().get())) {
 				task.dependsOn(LoomTasks.getIDELaunchConfigureTaskName(getProject()));
-			} else if (!taskBasedMinecraft) {
-				task.setEnabled(false);
 			}
 		});
 

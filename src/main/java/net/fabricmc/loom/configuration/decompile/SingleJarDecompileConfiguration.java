@@ -24,6 +24,7 @@
 
 package net.fabricmc.loom.configuration.decompile;
 
+import java.nio.file.Path;
 import java.util.List;
 
 import org.gradle.api.Project;
@@ -32,7 +33,9 @@ import org.gradle.api.tasks.TaskProvider;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJar;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftTaskGraph;
 import net.fabricmc.loom.configuration.providers.minecraft.TaskBasedMinecraftConfiguration;
+import net.fabricmc.loom.configuration.providers.minecraft.mapped.AbstractMappedMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.mapped.MappedMinecraftProvider;
 import net.fabricmc.loom.task.GenerateSourcesTask;
 import net.fabricmc.loom.util.Constants;
@@ -53,35 +56,37 @@ public class SingleJarDecompileConfiguration extends DecompileConfiguration<Mapp
 		assert minecraftJars.size() == 1;
 		final MinecraftJar minecraftJar = minecraftJars.get(0);
 		final String taskBaseName = getTaskName(minecraftJar.getType());
-		final boolean taskBasedMinecraft = TaskBasedMinecraftConfiguration.isEnabled(project);
+		final Path namedJar = minecraftJar.getPath();
+		final Path backupJar = AbstractMappedMinecraftProvider.getBackupJarPath(minecraftJar);
+		final Path lineMappedJar = TaskBasedMinecraftConfiguration.getLineMappedPath(project, minecraftJar);
+		final Path lineMap = TaskBasedMinecraftConfiguration.getLineMapPath(project, minecraftJar);
+		final Path lineMappedInputHash = TaskBasedMinecraftConfiguration.getLineMappedInputHashPath(project, minecraftJar);
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(project);
 
 		LoomGradleExtension.get(project).getDecompilerOptions().forEach(options -> {
 			final String decompilerName = options.getFormattedName();
 			String taskName = "%sWith%s".formatted(taskBaseName, decompilerName);
 			// Decompiler will be passed to the constructor of GenerateSourcesTask
 			final TaskProvider<GenerateSourcesTask> generateSourcesTask = project.getTasks().register(taskName, GenerateSourcesTask.class, options);
-			final TaskProvider<Task> processTask = taskBasedMinecraft
-					? project.getTasks().named(TaskBasedMinecraftConfiguration.getProcessTaskName(minecraftJar.getType()))
-					: null;
+			final TaskProvider<Task> processTask = project.getTasks().named(TaskBasedMinecraftConfiguration.getProcessTaskName(minecraftJar.getType()));
 
 			generateSourcesTask.configure(task -> {
 				task.getInputJarName().set(minecraftJar.getName());
-				task.getSourcesOutputJar().fileValue(taskBasedMinecraft
-						? TaskBasedMinecraftConfiguration.getSourcesPath(project, minecraftJar).toFile()
-						: GenerateSourcesTask.getJarFileWithSuffix("-sources.jar", minecraftJar.getPath()));
-
-				if (processTask != null) {
-					task.finalizedBy(processTask);
-				}
+				task.getClassesInputJar().fileValue(backupJar.toFile());
+				task.getLineNumberInputJar().fileValue(namedJar.toFile());
+				task.getSourcesOutputJar().fileValue(TaskBasedMinecraftConfiguration.getSourcesWorkPath(project, minecraftJar).toFile());
+				task.getClassesOutputJar().fileValue(lineMappedJar.toFile());
+				task.getLineMapOutputFile().fileValue(lineMap.toFile());
+				task.getClassesOutputJarInputHash().fileValue(lineMappedInputHash.toFile());
+				task.finalizedBy(processTask);
 
 				task.dependsOn(project.getTasks().named("validateAccessWidener"));
 				task.setDescription("Decompile minecraft using %s.".formatted(decompilerName));
 				task.setGroup(Constants.TaskGroup.FABRIC);
 			});
+			taskGraph.dependsOn(generateSourcesTask, namedJar, backupJar);
 
-			if (processTask != null) {
-				processTask.configure(task -> task.mustRunAfter(generateSourcesTask));
-			}
+			processTask.configure(task -> task.mustRunAfter(generateSourcesTask));
 		});
 
 		project.getTasks().register(taskBaseName, task -> {

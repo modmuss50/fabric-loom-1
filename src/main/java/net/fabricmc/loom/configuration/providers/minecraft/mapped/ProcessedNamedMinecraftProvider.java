@@ -24,66 +24,262 @@
 
 package net.fabricmc.loom.configuration.providers.minecraft.mapped;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import net.fabricmc.loom.configuration.ConfigContext;
-import net.fabricmc.loom.configuration.mods.dependency.LocalMavenHelper;
+import org.gradle.api.Task;
+import org.gradle.api.tasks.TaskProvider;
+
+import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
+import net.fabricmc.loom.configuration.accesswidener.ProcessMinecraftAccessWidenersTask;
+import net.fabricmc.loom.configuration.ifaceinject.ProcessMinecraftInterfaceInjectionsTask;
 import net.fabricmc.loom.configuration.processors.MinecraftJarProcessorManager;
-import net.fabricmc.loom.configuration.processors.ProcessorContextImpl;
+import net.fabricmc.loom.configuration.processors.ProcessMinecraftJsrAnnotationsTask;
 import net.fabricmc.loom.configuration.providers.minecraft.LegacyMergedMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MergedMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJar;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftSourceSets;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftTaskGraph;
 import net.fabricmc.loom.configuration.providers.minecraft.SingleJarEnvType;
 import net.fabricmc.loom.configuration.providers.minecraft.SingleJarMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.SplitMinecraftProvider;
+import net.fabricmc.loom.task.ProcessMinecraftJarTask;
 import net.fabricmc.loom.util.Constants;
-import net.fabricmc.loom.util.gradle.GradleUtils;
 
 public abstract class ProcessedNamedMinecraftProvider<M extends MinecraftProvider, P extends NamedMinecraftProvider<M>> extends NamedMinecraftProvider<M> {
 	private final P parentMinecraftProvider;
 	private final MinecraftJarProcessorManager jarProcessorManager;
-	private final boolean taskBasedMinecraft;
 
 	public ProcessedNamedMinecraftProvider(P parentMinecraftProvide, MinecraftJarProcessorManager jarProcessorManager) {
 		super(parentMinecraftProvide.getProject(), parentMinecraftProvide.getMinecraftProvider());
 		this.parentMinecraftProvider = parentMinecraftProvide;
 		this.jarProcessorManager = Objects.requireNonNull(jarProcessorManager);
-		this.taskBasedMinecraft = GradleUtils.getBooleanProperty(getProject(), Constants.Properties.TASK_BASED_MINECRAFT);
 	}
 
 	@Override
 	public List<MinecraftJar> provide(ProvideContext context) throws Exception {
+		parentMinecraftProvider.provide(context.withApplyDependencies(false));
 		final List<MinecraftJar> parentMinecraftJars = parentMinecraftProvider.getMinecraftJars();
 		final Map<MinecraftJar, MinecraftJar> minecraftJarOutputMap = parentMinecraftJars.stream()
 				.collect(Collectors.toMap(Function.identity(), this::getProcessedJar));
-		final List<MinecraftJar> minecraftJars = List.copyOf(minecraftJarOutputMap.values());
+		final List<MinecraftJarProcessorManager.JarProcessorTaskConfiguration> processorConfigurations = jarProcessorManager.getJarProcessorTaskConfigurations();
 
-		parentMinecraftProvider.provide(context.withApplyDependencies(false));
-
-		boolean requiresProcessing = shouldRefreshOutputs(context) || parentMinecraftJars.stream()
-				.map(this::getProcessedPath)
-				.anyMatch(jarProcessorManager::requiresProcessingJar);
-
-		if (requiresProcessing) {
-			processJars(minecraftJarOutputMap, context.configContext());
-			createBackupJars(minecraftJars);
-		}
+		registerProcessorTasks(minecraftJarOutputMap, processorConfigurations);
 
 		if (context.applyDependencies()) {
-			applyDependencies();
+			applyTaskDependencies();
 		}
 
 		return List.copyOf(minecraftJarOutputMap.values());
+	}
+
+	private void registerProcessorTasks(Map<MinecraftJar, MinecraftJar> minecraftJarOutputMap, List<MinecraftJarProcessorManager.JarProcessorTaskConfiguration> processorConfigurations) {
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(getProject());
+		final boolean disableObfuscation = extension.disableObfuscation();
+		final String productionNamespace = extension.getProductionNamespaceEnum().get().toString();
+		final List<Path> remapClasspath = disableObfuscation
+				? List.of()
+				: extension.getProductionNamespaceEnum().get() == MappingsNamespace.NAMED
+						? parentMinecraftProvider.getMinecraftJarPaths()
+						: extension.getMinecraftJars(extension.getProductionNamespaceEnum().get());
+		final Path mappingsFile = disableObfuscation ? null : extension.getMappingConfiguration().tinyMappings;
+
+		for (Map.Entry<MinecraftJar, MinecraftJar> entry : minecraftJarOutputMap.entrySet()) {
+			final MinecraftJar inputJar = entry.getKey();
+			final MinecraftJar outputJar = entry.getValue();
+			final String taskSuffix = Character.toUpperCase(outputJar.getName().charAt(0)) + outputJar.getName().substring(1);
+			Path stageInput = inputJar.getPath();
+
+			for (MinecraftJarProcessorManager.JarProcessorTaskConfiguration processorConfiguration : processorConfigurations) {
+				final Path stageOutput = getProcessorStagePath(outputJar, processorConfiguration.processorIndex());
+				final TaskProvider<? extends Task> stageTask = registerProcessorTask(
+						inputJar,
+						taskSuffix,
+						stageInput,
+						stageOutput,
+						processorConfiguration,
+						disableObfuscation,
+						productionNamespace,
+						mappingsFile,
+						remapClasspath
+				);
+				taskGraph.dependsOn(stageTask, stageInput);
+
+				if (processorConfiguration instanceof MinecraftJarProcessorManager.AccessWidenerTaskConfiguration accessWideners
+						&& accessWideners.analysis() != null) {
+					taskGraph.dependsOn(stageTask, accessWideners.analysis());
+				} else if (processorConfiguration instanceof MinecraftJarProcessorManager.InterfaceInjectionTaskConfiguration interfaceInjections
+						&& interfaceInjections.analysis() != null) {
+					taskGraph.dependsOn(stageTask, interfaceInjections.analysis());
+				}
+
+				if (processorConfiguration instanceof MinecraftJarProcessorManager.AccessWidenerTaskConfiguration
+						|| processorConfiguration instanceof MinecraftJarProcessorManager.InterfaceInjectionTaskConfiguration) {
+					registerRemappingDependencies(taskGraph, stageTask, mappingsFile, remapClasspath);
+				}
+
+				taskGraph.registerOutput(stageOutput, stageTask);
+				stageInput = stageOutput;
+			}
+
+			final Path processedInput = stageInput;
+			final TaskProvider<ProcessMinecraftJarTask> processorTask = getProject().getTasks().register("applyMinecraftProcessors" + taskSuffix, ProcessMinecraftJarTask.class, task -> {
+				task.setDescription("Finalizes the processed %s Minecraft jar.".formatted(outputJar.getName()));
+				task.setGroup(Constants.TaskGroup.FABRIC);
+				task.getInputJar().fileValue(processedInput.toFile());
+				task.getOutputJar().fileValue(outputJar.toFile());
+			});
+			taskGraph.dependsOn(processorTask, processedInput);
+			taskGraph.registerOutput(outputJar.getPath(), processorTask);
+
+			final Path backupPath = getBackupJarPath(outputJar);
+			final TaskProvider<ProcessMinecraftJarTask> backupTask = getProject().getTasks().register("backupProcessedMinecraft" + taskSuffix, ProcessMinecraftJarTask.class, task -> {
+				task.setDescription("Backs up the processed %s Minecraft jar.".formatted(outputJar.getName()));
+				task.setGroup(Constants.TaskGroup.FABRIC);
+				task.getInputJar().fileValue(outputJar.toFile());
+				task.getOutputJar().fileValue(backupPath.toFile());
+			});
+			taskGraph.dependsOn(backupTask, outputJar.getPath());
+			taskGraph.registerOutput(backupPath, backupTask);
+		}
+	}
+
+	private TaskProvider<? extends Task> registerProcessorTask(MinecraftJar minecraftJar, String taskSuffix, Path input, Path output, MinecraftJarProcessorManager.JarProcessorTaskConfiguration configuration, boolean disableObfuscation, String productionNamespace, Path mappingsFile, List<Path> remapClasspath) {
+		final String taskName = "applyMinecraft" + taskSuffix + "Processor" + configuration.processorIndex();
+
+		if (configuration instanceof MinecraftJarProcessorManager.AccessWidenerTaskConfiguration accessWideners) {
+			return getProject().getTasks().register(taskName, ProcessMinecraftAccessWidenersTask.class, task -> {
+				configureProcessorTask(task, configuration, input, output);
+				task.getAccessWideners().set(accessWideners.descriptors());
+				task.getAccessWidenerSources().from(accessWideners.sources().stream().map(Path::toFile).toList());
+				task.getAccessWidenerSourcePaths().set(accessWideners.sources().stream().map(Path::toString).toList());
+
+				if (accessWideners.analysis() != null) {
+					task.getProcessorAnalysis().fileValue(accessWideners.analysis().toFile());
+				}
+
+				if (accessWideners.processorSources() != null) {
+					task.getAccessWidenerSources().from(accessWideners.processorSources());
+				}
+
+				task.getIncludesClient().set(minecraftJar.includesClient());
+				task.getIncludesServer().set(minecraftJar.includesServer());
+				task.getDisableObfuscation().set(disableObfuscation);
+				task.getProductionNamespace().set(productionNamespace);
+
+				if (!disableObfuscation) {
+					task.getKnownIndyBsms().set(extension.getKnownIndyBsms());
+					task.getMappingsFile().fileValue(Objects.requireNonNull(mappingsFile).toFile());
+					task.getRemapClasspath().from(remapClasspath.stream().map(Path::toFile).toList());
+				}
+			});
+		}
+
+		if (configuration instanceof MinecraftJarProcessorManager.InterfaceInjectionTaskConfiguration interfaceInjections) {
+			return getProject().getTasks().register(taskName, ProcessMinecraftInterfaceInjectionsTask.class, task -> {
+				configureProcessorTask(task, configuration, input, output);
+				task.getInjectedInterfaces().set(interfaceInjections.injectedInterfaces());
+				task.getClientOnlyModIds().set(interfaceInjections.clientOnlyModIds());
+
+				if (interfaceInjections.analysis() != null) {
+					task.getProcessorAnalysis().fileValue(interfaceInjections.analysis().toFile());
+				}
+
+				if (interfaceInjections.processorSources() != null) {
+					task.getProcessorSources().from(interfaceInjections.processorSources());
+				}
+
+				task.getIncludesClient().set(minecraftJar.includesClient());
+				task.getDisableObfuscation().set(disableObfuscation);
+				task.getProductionNamespace().set(productionNamespace);
+
+				if (!disableObfuscation) {
+					task.getKnownIndyBsms().set(extension.getKnownIndyBsms());
+					task.getMappingsFile().fileValue(Objects.requireNonNull(mappingsFile).toFile());
+					task.getRemapClasspath().from(remapClasspath.stream().map(Path::toFile).toList());
+				}
+			});
+		}
+
+		if (configuration instanceof MinecraftJarProcessorManager.JsrAnnotationTaskConfiguration jsrAnnotations) {
+			return getProject().getTasks().register(taskName, ProcessMinecraftJsrAnnotationsTask.class, task -> {
+				configureProcessorTask(task, configuration, input, output);
+				task.getAnnotationMappings().set(jsrAnnotations.annotationMappings());
+
+				if (jsrAnnotations.enabled() != null) {
+					task.getProcessorEnabled().set(jsrAnnotations.enabled());
+				}
+			});
+		}
+
+		throw new IllegalArgumentException("Unsupported Minecraft processor task configuration: " + configuration.getClass().getName());
+	}
+
+	private static void configureProcessorTask(ProcessMinecraftAccessWidenersTask task, MinecraftJarProcessorManager.JarProcessorTaskConfiguration configuration, Path input, Path output) {
+		configureProcessorTask((Task) task, configuration);
+		task.getInputJar().fileValue(input.toFile());
+		task.getOutputJar().fileValue(output.toFile());
+	}
+
+	private static void configureProcessorTask(ProcessMinecraftInterfaceInjectionsTask task, MinecraftJarProcessorManager.JarProcessorTaskConfiguration configuration, Path input, Path output) {
+		configureProcessorTask((Task) task, configuration);
+		task.getInputJar().fileValue(input.toFile());
+		task.getOutputJar().fileValue(output.toFile());
+	}
+
+	private static void configureProcessorTask(ProcessMinecraftJsrAnnotationsTask task, MinecraftJarProcessorManager.JarProcessorTaskConfiguration configuration, Path input, Path output) {
+		configureProcessorTask((Task) task, configuration);
+		task.getInputJar().fileValue(input.toFile());
+		task.getOutputJar().fileValue(output.toFile());
+	}
+
+	private static void configureProcessorTask(Task task, MinecraftJarProcessorManager.JarProcessorTaskConfiguration configuration) {
+		task.setDescription("Applies the %s processor to a Minecraft jar.".formatted(configuration.name()));
+		task.setGroup(Constants.TaskGroup.FABRIC);
+	}
+
+	private static void registerRemappingDependencies(MinecraftTaskGraph taskGraph, TaskProvider<? extends Task> task, Path mappingsFile, List<Path> remapClasspath) {
+		if (mappingsFile != null && taskGraph.hasProducer(mappingsFile)) {
+			taskGraph.dependsOn(task, mappingsFile);
+		}
+
+		for (Path classpath : remapClasspath) {
+			if (taskGraph.hasProducer(classpath)) {
+				taskGraph.dependsOn(task, classpath);
+			}
+		}
+	}
+
+	private static Path getProcessorStagePath(MinecraftJar outputJar, int processorIndex) {
+		return outputJar.getPath().getParent()
+				.resolve("processor-stages")
+				.resolve("%02d.jar".formatted(processorIndex));
+	}
+
+	private void applyTaskDependencies() {
+		final List<MinecraftJar.Type> dependencyTargets = getDependencyTypes();
+
+		if (dependencyTargets.isEmpty()) {
+			return;
+		}
+
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(getProject());
+		MinecraftSourceSets.get(getProject()).applyDependencies(
+				(configuration, type) -> getProject().getDependencies().add(configuration, taskGraph.files(getProcessedPath(getMinecraftJar(type)))),
+				dependencyTargets
+		);
+	}
+
+	private MinecraftJar getMinecraftJar(MinecraftJar.Type type) {
+		return parentMinecraftProvider.getMinecraftJars().stream()
+				.filter(jar -> jar.getType() == type)
+				.findFirst()
+				.orElseThrow(() -> new IllegalArgumentException("Missing Minecraft jar for type: " + type));
 	}
 
 	@Override
@@ -95,63 +291,8 @@ public abstract class ProcessedNamedMinecraftProvider<M extends MinecraftProvide
 	}
 
 	@Override
-	public MavenScope getMavenScope() {
-		return MavenScope.LOCAL;
-	}
-
-	private void processJars(Map<MinecraftJar, MinecraftJar> minecraftJarMap, ConfigContext configContext) throws IOException {
-		for (Map.Entry<MinecraftJar, MinecraftJar> entry : minecraftJarMap.entrySet()) {
-			final MinecraftJar minecraftJar = entry.getKey();
-			final MinecraftJar outputJar = entry.getValue();
-			deleteSimilarJars(outputJar.getPath());
-
-			final Path outputPath;
-
-			if (taskBasedMinecraft) {
-				outputPath = outputJar.getPath();
-				Files.createDirectories(outputPath.getParent());
-				Files.copy(minecraftJar.getPath(), outputPath, StandardCopyOption.REPLACE_EXISTING);
-			} else {
-				final LocalMavenHelper mavenHelper = getMavenHelper(minecraftJar.getType());
-				outputPath = mavenHelper.copyToMaven(minecraftJar.getPath(), null);
-			}
-
-			assert outputJar.getPath().equals(outputPath);
-
-			jarProcessorManager.processJar(outputPath, new ProcessorContextImpl(configContext, minecraftJar));
-		}
-	}
-
-	@Override
 	public List<MinecraftJar.Type> getDependencyTypes() {
 		return parentMinecraftProvider.getDependencyTypes();
-	}
-
-	private void applyDependencies() {
-		final List<MinecraftJar.Type> dependencyTargets = getDependencyTypes();
-
-		if (dependencyTargets.isEmpty()) {
-			return;
-		}
-
-		MinecraftSourceSets.get(getProject()).applyDependencies(
-				(configuration, name) -> getProject().getDependencies().add(configuration, getDependencyNotation(name)),
-				dependencyTargets
-		);
-	}
-
-	private void deleteSimilarJars(Path jar) throws IOException {
-		Files.deleteIfExists(jar);
-		final Path parent = jar.getParent();
-
-		if (Files.notExists(parent)) {
-			return;
-		}
-
-		for (Path path : Files.list(parent).filter(Files::isRegularFile)
-				.filter(path -> path.getFileName().startsWith(jar.getFileName().toString().replace(".jar", ""))).toList()) {
-			Files.deleteIfExists(path);
-		}
 	}
 
 	@Override
@@ -183,45 +324,13 @@ public abstract class ProcessedNamedMinecraftProvider<M extends MinecraftProvide
 	}
 
 	private Path getProcessedPath(MinecraftJar minecraftJar) {
-		if (taskBasedMinecraft) {
-			return extension.getFiles().getProjectPersistentCache().toPath()
-					.resolve("minecraft")
-					.resolve("processed")
-					.resolve(getVersion())
-					.resolve(jarProcessorManager.getJarHash())
-					.resolve(minecraftJar.getType().toString())
-					.resolve("minecraft-%s.jar".formatted(minecraftJar.getType()));
-		}
-
-		final LocalMavenHelper mavenHelper = getMavenHelper(minecraftJar.getType());
-		return mavenHelper.getOutputFile(null);
-	}
-
-	@Override
-	protected boolean shouldRefreshOutputs(ProvideContext context) {
-		if (!taskBasedMinecraft) {
-			return super.shouldRefreshOutputs(context);
-		}
-
-		if (context.refreshOutputs()) {
-			return true;
-		}
-
-		final List<? extends OutputJar> outputJars = getOutputJars();
-
-		if (outputJars.isEmpty()) {
-			throw new IllegalStateException("No output jars provided");
-		}
-
-		for (OutputJar outputJar : outputJars) {
-			final MinecraftJar minecraftJar = outputJar.outputJar();
-
-			if (!Files.exists(minecraftJar.getPath()) || requiresBackupJars() && !Files.exists(getBackupJarPath(minecraftJar))) {
-				return true;
-			}
-		}
-
-		return false;
+		return extension.getFiles().getProjectPersistentCache().toPath()
+				.resolve("minecraft")
+				.resolve("processed")
+				.resolve(getVersion())
+				.resolve(jarProcessorManager.getJarHash())
+				.resolve(minecraftJar.getType().toString())
+				.resolve("minecraft-%s.jar".formatted(minecraftJar.getType()));
 	}
 
 	public MinecraftJar getProcessedJar(MinecraftJar minecraftJar) {

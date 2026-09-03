@@ -24,60 +24,18 @@
 
 package net.fabricmc.loom.configuration;
 
-import java.io.File;
-import java.io.IOException;
-import java.util.Objects;
-import java.util.Optional;
-
 import org.gradle.api.Project;
-import org.gradle.api.artifacts.Configuration;
-import org.jspecify.annotations.Nullable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import net.fabricmc.loom.configuration.processors.speccontext.DebofConfiguration;
-import net.fabricmc.loom.util.ZipUtils;
-import net.fabricmc.loom.util.fmj.FabricModJson;
-import net.fabricmc.loom.util.fmj.FabricModJsonFactory;
 
-public class DebofInstallerData {
-	private static final Logger LOGGER = LoggerFactory.getLogger(DebofInstallerData.class);
-
-	public static void findAndApply(Project project) {
-		for (DebofConfiguration debofConfiguration : DebofConfiguration.ALL) {
-			for (Configuration configuration : debofConfiguration.getConfigurations(project)) {
-				Optional<InstallerData> installerData = configuration.getFiles().parallelStream()
-						.filter(File::isFile)
-						.map(DebofInstallerData::getInstaller)
-						.filter(Objects::nonNull)
-						.findFirst();
-
-				if (installerData.isPresent()) {
-					LOGGER.info("Applying installer data from configuration '{}'", configuration.getName());
-					installerData.get().applyToProject(project);
-					return;
-				}
-			}
-		}
-
-		LOGGER.info("No installer data found in any configuration.");
+public final class DebofInstallerData {
+	private DebofInstallerData() {
 	}
 
-	@Nullable
-	private static InstallerData getInstaller(File file) {
-		try {
-			byte[] installerData = ZipUtils.unpackNullable(file.toPath(), InstallerData.INSTALLER_PATH);
-
-			if (installerData == null) {
-				return null;
-			}
-
-			FabricModJson fabricModJson = FabricModJsonFactory.createFromZip(file.toPath());
-			LOGGER.info("Found installer in mod {} version {}", fabricModJson.getId(), fabricModJson.getModVersion());
-			return InstallerData.fromBytes(installerData, fabricModJson.getModVersion());
-		} catch (IOException e) {
-			LOGGER.debug("Failed to read installer data from file '{}'", file, e);
-			return null;
-		}
+	public static void registerTasks(Project project) {
+		InstallerDataTaskConfiguration.register(project, DebofConfiguration.ALL.stream()
+				.flatMap(configuration -> configuration.getConfigurations(project).stream())
+				.distinct()
+				.toList());
 	}
 }

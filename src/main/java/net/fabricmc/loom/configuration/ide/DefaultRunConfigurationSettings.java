@@ -32,9 +32,8 @@ import org.gradle.api.tasks.SourceSet;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.api.RunConfiguration;
+import net.fabricmc.loom.configuration.InstallerDataTaskConfiguration;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftSourceSets;
-import net.fabricmc.loom.configuration.providers.minecraft.MinecraftVersionMeta;
-import net.fabricmc.loom.configuration.providers.minecraft.library.LibraryContext;
 import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.Platform;
 import net.fabricmc.loom.util.Strings;
@@ -44,7 +43,7 @@ public class DefaultRunConfigurationSettings {
 	// Configure the default values before the user can modify them.
 	public static void configureDefaults(RunConfiguration run, Project project) {
 		run.getAppendProjectPathToDisplayName().convention(true);
-		run.getMainClass().convention(run.getRuntimeEnvironment().map(side -> RunConfigUtils.getMainClass(side, LoomGradleExtension.get(project))));
+		run.getMainClass().convention(InstallerDataTaskConfiguration.getMainClass(project, run.getRuntimeEnvironment()));
 		run.getDevLaunchMainClass().convention(Constants.DLI_ENTRYPOINT);
 		run.getSourceSet().convention(run.getRuntimeEnvironment().map(runtimeEnvironment -> MinecraftSourceSets.get(project).getSourceSetForEnv(runtimeEnvironment)));
 		run.getDisplayName().convention(run.getSourceSet().map(sourceSet -> {
@@ -78,9 +77,6 @@ public class DefaultRunConfigurationSettings {
 		internalRun.getIsFinalised().finalizeValue();
 
 		LoomGradleExtension extension = LoomGradleExtension.get(project);
-		LibraryContext context = new LibraryContext(extension.getMinecraftProvider().getVersionInfo(), JavaVersion.current());
-		MinecraftVersionMeta.JavaVersion javaVersion = extension.getMinecraftProvider().getVersionInfo().javaVersion();
-
 		String environment = run.getRuntimeEnvironment().get().toLowerCase(Locale.ROOT);
 
 		run.getJvmArguments().add("-Dfabric.dli.config=" + encodeEscaped(extension.getFiles().getDevLauncherConfig().getAbsolutePath()));
@@ -91,7 +87,7 @@ public class DefaultRunConfigurationSettings {
 			// Required since 26.3-snapshot-10
 			run.getJvmArguments().add("-XX:StackShadowPages=32");
 
-			if (context.usesLWJGL3() && Platform.CURRENT.getOperatingSystem().isMacOS()) {
+			if (Platform.CURRENT.getOperatingSystem().isMacOS()) {
 				run.getJvmArguments().add("-XstartOnFirstThread");
 			}
 
@@ -100,7 +96,7 @@ public class DefaultRunConfigurationSettings {
 			}
 		}
 
-		if (javaVersion != null && javaVersion.majorVersion() >= 25) {
+		if (JavaVersion.current().isCompatibleWith(JavaVersion.toVersion(25))) {
 			run.getJvmArguments().add("--sun-misc-unsafe-memory-access=allow");
 			run.getJvmArguments().add("--enable-native-access=ALL-UNNAMED");
 		}

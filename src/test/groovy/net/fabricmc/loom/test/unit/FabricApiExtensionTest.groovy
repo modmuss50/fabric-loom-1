@@ -25,18 +25,53 @@
 package net.fabricmc.loom.test.unit
 
 import org.gradle.api.Project
+import org.gradle.api.artifacts.Configuration
 import spock.lang.Specification
 
 import net.fabricmc.loom.configuration.fabricapi.FabricApiVersions
+import net.fabricmc.loom.test.LoomTestConstants
 import net.fabricmc.loom.test.util.GradleTestUtil
 
 class FabricApiExtensionTest extends Specification {
+	def "module dependency notation remains lazy when added to a configuration"() {
+		given:
+		def testProject = GradleTestUtil.mockProject()
+		def fabricApi = new FabricApiVersions() {
+					Project project = testProject
+				}
+		def apiVersion = "lazy-test-${UUID.randomUUID()}"
+		def pom = new File(LoomTestConstants.TEST_DIR, "fabric-api/fabric-api-${apiVersion}.pom")
+		pom.parentFile.mkdirs()
+		pom.text = "not a pom"
+		def configuration = testProject.configurations.create("fabricApiLazyTest")
+
+		when:
+		testProject.dependencies.add(configuration.name, fabricApi.module("fabric-api-base", apiVersion))
+
+		then:
+		configuration.state == Configuration.State.UNRESOLVED
+
+		cleanup:
+		pom.delete()
+	}
+
+	def "get module dependency notation"() {
+		when:
+		def fabricApi = new FabricApiVersions() {
+					Project project = GradleTestUtil.mockProject()
+				}
+		def notation = fabricApi.module("fabric-api-base", "0.88.3+1.20.2").get()
+
+		then:
+		notation == "net.fabricmc.fabric-api:fabric-api-base:0.4.32+fce67b3299"
+	}
+
 	def "get module version"() {
 		when:
 		def fabricApi = new FabricApiVersions() {
 					Project project = GradleTestUtil.mockProject()
 				}
-		def version = fabricApi.moduleVersion(moduleName, apiVersion)
+		def version = fabricApi.moduleVersion(moduleName, apiVersion).get()
 
 		then:
 		version == expectedVersion
@@ -54,7 +89,7 @@ class FabricApiExtensionTest extends Specification {
 		def fabricApi = new FabricApiVersions() {
 					Project project = GradleTestUtil.mockProject()
 				}
-		fabricApi.moduleVersion("fabric-api-unknown", apiVersion)
+		fabricApi.moduleVersion("fabric-api-unknown", apiVersion).get()
 
 		then:
 		def e = thrown RuntimeException

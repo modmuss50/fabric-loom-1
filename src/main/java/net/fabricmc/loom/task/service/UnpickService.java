@@ -33,6 +33,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -51,9 +52,12 @@ import org.gradle.api.provider.Property;
 import org.gradle.api.provider.Provider;
 import org.gradle.api.tasks.Classpath;
 import org.gradle.api.tasks.Input;
+import org.gradle.api.tasks.InputFile;
+import org.gradle.api.tasks.Internal;
 import org.gradle.api.tasks.Nested;
 import org.gradle.api.tasks.Optional;
-import org.gradle.api.tasks.OutputFile;
+import org.gradle.api.tasks.PathSensitive;
+import org.gradle.api.tasks.PathSensitivity;
 import org.jspecify.annotations.Nullable;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
@@ -64,6 +68,7 @@ import org.slf4j.LoggerFactory;
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.configuration.providers.mappings.MappingConfiguration;
+import net.fabricmc.loom.configuration.providers.mappings.RemapMappingConfiguration;
 import net.fabricmc.loom.configuration.providers.mappings.unpick.UnpickMetadata;
 import net.fabricmc.loom.task.GenerateSourcesTask;
 import net.fabricmc.loom.util.AsyncZipProcessor;
@@ -87,8 +92,20 @@ public class UnpickService extends Service<UnpickService.Options> {
 	public static final ServiceType<Options, UnpickService> TYPE = new ServiceType<>(Options.class, UnpickService.class);
 
 	public interface Options extends Service.Options {
-		@Input
-		Property<byte[]> getUnpickDefinitions();
+		@Optional
+		@InputFile
+		@PathSensitive(PathSensitivity.NONE)
+		RegularFileProperty getMappingsExtrasJar();
+
+		@Optional
+		@InputFile
+		@PathSensitive(PathSensitivity.NONE)
+		RegularFileProperty getUnpickDefinitions();
+
+		@Optional
+		@InputFile
+		@PathSensitive(PathSensitivity.NONE)
+		RegularFileProperty getUnpickMetadata();
 
 		@Optional
 		@Nested
@@ -100,44 +117,64 @@ public class UnpickService extends Service<UnpickService.Options> {
 		@Classpath
 		ConfigurableFileCollection getUnpickClasspath();
 
-		@OutputFile
+		@Internal
 		RegularFileProperty getUnpickOutputJar();
 
 		@Input
-		Property<Boolean> getLenient();
+		Property<String> getRuntimeNamespace();
 	}
 
 	public static Provider<Options> createOptions(GenerateSourcesTask task) {
 		final Project project = task.getProject();
-		return TYPE.maybeCreate(project, options -> {
-			LoomGradleExtension extension = LoomGradleExtension.get(project);
-			MappingConfiguration mappingConfiguration = extension.getMappingConfigurationOrNull();
+		final LoomGradleExtension extension = LoomGradleExtension.get(project);
+		final MappingConfiguration mappingConfiguration = extension.getMappingConfigurationOrNull();
+		final MappingConfiguration.UnpickTaskConfiguration unpickTaskConfiguration = mappingConfiguration != null
+				? mappingConfiguration.getUnpickTaskConfiguration()
+				: null;
 
-			if (mappingConfiguration == null || !mappingConfiguration.hasUnpickDefinitions()) {
+		if (unpickTaskConfiguration != null) {
+			task.dependsOn(unpickTaskConfiguration.task());
+		}
+
+		return TYPE.maybeCreate(project, options -> {
+			if (mappingConfiguration == null) {
 				return false;
 			}
 
-			UnpickMetadata unpickMetadata = mappingConfiguration.getUnpickMetadata();
-			MappingsNamespace runtimeNamespace = mappingConfiguration.getRuntimeNamespace();
+			final Path mappingsExtrasJar = mappingConfiguration.getInputJar();
+			final MappingsNamespace runtimeNamespace = mappingConfiguration.getRuntimeNamespace();
 
-			if (unpickMetadata instanceof UnpickMetadata.V2 v2) {
-				if (!Objects.equals(v2.namespace(), runtimeNamespace.toString())) {
-					options.getUnpickRemapperService().set(UnpickRemapperService.createOptions(project, v2));
-				}
+			if (unpickTaskConfiguration == null && !mappingConfiguration.hasUnpickDefinitions()) {
+				return false;
+			}
+
+			if (unpickTaskConfiguration != null) {
+				options.getUnpickDefinitions().set(unpickTaskConfiguration.task().flatMap(taskOutput -> taskOutput.getDefinitions()));
+				options.getUnpickMetadata().set(unpickTaskConfiguration.task().flatMap(taskOutput -> taskOutput.getMetadata()));
+			} else {
+				options.getMappingsExtrasJar().fileValue(mappingsExtrasJar.toFile());
+			}
+
+			options.getRuntimeNamespace().set(runtimeNamespace.toString());
+
+			if (mappingConfiguration instanceof RemapMappingConfiguration) {
+				options.getUnpickRemapperService().set(UnpickRemapperService.createOptions(project));
 			}
 
 			ConfigurationContainer configurations = project.getConfigurations();
-			options.getUnpickDefinitions().set(mappingConfiguration.getUnpickDefinitions());
 
-			options.getUnpickOutputJar().set(task.getInputJarName().map(s -> project.getLayout()
-					.dir(project.provider(() -> extension.getFiles().getProjectPersistentCache().toPath()
-							.resolve("unpick").resolve(mappingConfiguration.mappingsIdentifier()).toFile()))
-					.get().file(s + "-unpicked.jar")));
+			options.getUnpickOutputJar().set(task.getInputJarName().flatMap(inputJarName -> project.getLayout().getBuildDirectory()
+					.file("tmp/%s/%s-unpicked.jar".formatted(task.getName(), inputJarName))));
 			options.getUnpickConstantJar().setFrom(configurations.named(Constants.Configurations.MAPPING_CONSTANTS));
+
+			if (unpickTaskConfiguration != null) {
+				options.getUnpickConstantJar().from(unpickTaskConfiguration.task().flatMap(taskOutput -> taskOutput.getConstantsJar()));
+			}
+
 			options.getUnpickClasspath().setFrom(configurations.named(Constants.Configurations.MINECRAFT_COMPILE_LIBRARIES));
 			options.getUnpickClasspath().from(configurations.named(Constants.Configurations.MOD_COMPILE_CLASSPATH_MAPPED));
-			options.getLenient().set(unpickMetadata instanceof UnpickMetadata.V1);
-			extension.getMinecraftJars(runtimeNamespace).forEach(options.getUnpickClasspath()::from);
+			options.getUnpickClasspath().from(extension.getMinecraftJarsCollection(runtimeNamespace));
+
 			return true;
 		});
 	}
@@ -147,25 +184,31 @@ public class UnpickService extends Service<UnpickService.Options> {
 	}
 
 	public Path unpickJar(Path inputJar, @Nullable Path existingClasses) throws IOException {
+		final UnpickData unpickData = getUnpickData();
+		final Path outputJar = getOptions().getUnpickOutputJar().get().getAsFile().toPath();
+		Files.createDirectories(outputJar.getParent());
+		Files.deleteIfExists(outputJar);
+
+		if (unpickData == null) {
+			Files.copy(inputJar, outputJar, StandardCopyOption.REPLACE_EXISTING);
+			return outputJar;
+		}
+
 		final List<Path> classpath = Stream.of(
 				getOptions().getUnpickClasspath().getFiles().stream().map(File::toPath),
 				getOptions().getUnpickConstantJar().getFiles().stream().map(File::toPath),
 				Stream.of(inputJar),
 				Stream.ofNullable(existingClasses)
 			).flatMap(Function.identity()).toList();
-		final Path outputJar = getOptions().getUnpickOutputJar().get().getAsFile().toPath();
-		Files.createDirectories(outputJar.getParent());
-		Files.deleteIfExists(outputJar);
-
 		try (ZipFsClasspath zipFsClasspath = ZipFsClasspath.create(classpath);
-				InputStream unpickDefinitions = getUnpickDefinitionsInputStream()) {
+				InputStream unpickDefinitions = getUnpickDefinitionsInputStream(unpickData)) {
 			IClassResolver classResolver = zipFsClasspath.createClassResolver().chain(ClassResolvers.classpath());
 			ConstantUninliner uninliner = ConstantUninliner.builder()
 					.logger(JAVA_LOGGER)
 					.classResolver(classResolver)
 					.grouper(ConstantGroupers.dataDriven()
 							.logger(JAVA_LOGGER)
-							.lenient(getOptions().getLenient().get())
+							.lenient(unpickData.metadata() instanceof UnpickMetadata.V1)
 							.classResolver(classResolver)
 							.mappingSource(unpickDefinitions)
 							.build())
@@ -177,14 +220,25 @@ public class UnpickService extends Service<UnpickService.Options> {
 		return outputJar;
 	}
 
-	private InputStream getUnpickDefinitionsInputStream() throws IOException {
-		final byte[] definitions = getOptions().getUnpickDefinitions().get();
+	private InputStream getUnpickDefinitionsInputStream(UnpickData unpickData) throws IOException {
+		final byte[] definitions = unpickData.definitions();
+		final String runtimeNamespace = getOptions().getRuntimeNamespace().get();
+		final String definitionsNamespace = getDefinitionsNamespace(unpickData.metadata(), runtimeNamespace);
 
-		if (getOptions().getUnpickRemapperService().isPresent()) {
+		if (!Objects.equals(definitionsNamespace, runtimeNamespace)) {
+			if (!getOptions().getUnpickRemapperService().isPresent()) {
+				throw new UnsupportedOperationException("Cannot remap unpick definitions from %s to %s for this mappings configuration"
+						.formatted(definitionsNamespace, runtimeNamespace));
+			}
+
 			LOGGER.info("Remapping unpick definitions");
 
 			UnpickRemapperService unpickRemapperService = getServiceFactory().get(getOptions().getUnpickRemapperService());
-			String remapped = unpickRemapperService.remap(new InputStreamReader(new ByteArrayInputStream(definitions), StandardCharsets.UTF_8));
+			String remapped = unpickRemapperService.remap(
+					new InputStreamReader(new ByteArrayInputStream(definitions), StandardCharsets.UTF_8),
+					definitionsNamespace,
+					runtimeNamespace
+			);
 
 			return new ByteArrayInputStream(remapped.getBytes(StandardCharsets.UTF_8));
 		}
@@ -195,14 +249,63 @@ public class UnpickService extends Service<UnpickService.Options> {
 	}
 
 	public String getUnpickCacheKey() {
+		final Checksum definitionsChecksum = getOptions().getUnpickDefinitions().isPresent()
+				? Checksum.of(List.of(
+						Checksum.of(getOptions().getUnpickDefinitions().get().getAsFile()),
+						Checksum.of(getOptions().getUnpickMetadata().get().getAsFile())
+				))
+				: Checksum.of(getOptions().getMappingsExtrasJar().get().getAsFile());
 		return Checksum.of(List.of(
-				Checksum.of(getOptions().getUnpickDefinitions().get()),
+				definitionsChecksum,
 				Checksum.of(getOptions().getUnpickConstantJar()),
-				Checksum.of(getOptions().getUnpickRemapperService()
-						.flatMap(options -> options.getTinyRemapper()
-								.flatMap(TinyRemapperService.Options::getFrom))
-						.getOrElse("named"))
+				Checksum.of(getOptions().getRuntimeNamespace().get())
 		)).sha256().hex();
+	}
+
+	private UnpickData getUnpickData() throws IOException {
+		if (getOptions().getUnpickDefinitions().isPresent()) {
+			final Path definitions = getOptions().getUnpickDefinitions().get().getAsFile().toPath();
+			final Path metadata = getOptions().getUnpickMetadata().get().getAsFile().toPath();
+
+			if (Files.size(definitions) == 0 && Files.size(metadata) == 0) {
+				return null;
+			}
+
+			if (Files.size(definitions) == 0 || Files.size(metadata) == 0) {
+				throw new IOException("Prepared unpick definitions and metadata must either both be empty or both contain data");
+			}
+
+			return new UnpickData(UnpickMetadata.parse(metadata), Files.readAllBytes(definitions));
+		}
+
+		return readUnpickData(getOptions().getMappingsExtrasJar().get().getAsFile().toPath());
+	}
+
+	private static String getDefinitionsNamespace(UnpickMetadata metadata, String runtimeNamespace) {
+		return metadata instanceof UnpickMetadata.V2 v2 ? v2.namespace() : runtimeNamespace;
+	}
+
+	private static @Nullable UnpickData readUnpickData(Path mappingsExtrasJar) throws IOException {
+		try (FileSystemUtil.Delegate delegate = FileSystemUtil.getJarFileSystem(mappingsExtrasJar, false)) {
+			final Path definitionsPath = delegate.fs().getPath(UnpickMetadata.UNPICK_DEFINITIONS_PATH);
+			final Path metadataPath = delegate.fs().getPath(UnpickMetadata.UNPICK_METADATA_PATH);
+			final boolean hasDefinitions = Files.exists(definitionsPath);
+			final boolean hasMetadata = Files.exists(metadataPath);
+
+			if (!hasDefinitions && !hasMetadata) {
+				return null;
+			}
+
+			if (!hasDefinitions || !hasMetadata) {
+				throw new IOException("Mappings must contain both %s and %s"
+						.formatted(UnpickMetadata.UNPICK_DEFINITIONS_PATH, UnpickMetadata.UNPICK_METADATA_PATH));
+			}
+
+			return new UnpickData(UnpickMetadata.parse(metadataPath), Files.readAllBytes(definitionsPath));
+		}
+	}
+
+	private record UnpickData(UnpickMetadata metadata, byte[] definitions) {
 	}
 
 	private record UnpickZipProcessor(ConstantUninliner uninliner) implements AsyncZipProcessor {

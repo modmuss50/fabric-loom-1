@@ -37,6 +37,7 @@ import org.gradle.jvm.tasks.Jar;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.configuration.IncludeConfigurations;
+import net.fabricmc.loom.configuration.InstallerDataTaskConfiguration;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftSourceSets;
 import net.fabricmc.loom.task.service.ClientEntriesService;
 import net.fabricmc.loom.task.service.JarManifestService;
@@ -61,6 +62,7 @@ public class NonRemappedJarTaskConfiguration {
 		final Provider<JarManifestService> manifestServiceProvider = JarManifestService.get(project);
 
 		project.getTasks().named(JavaPlugin.JAR_TASK_NAME, Jar.class).configure(task -> {
+			task.dependsOn(InstallerDataTaskConfiguration.SCAN_INSTALLER_DATA_TASK);
 			task.doLast(new ManifestModificationAction(
 					manifestServiceProvider,
 					"official",

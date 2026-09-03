@@ -40,8 +40,9 @@ import org.gradle.api.tasks.TaskProvider;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.api.RunConfiguration;
+import net.fabricmc.loom.configuration.InstallerDataTaskConfiguration;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJarConfiguration;
-import net.fabricmc.loom.configuration.providers.minecraft.MinecraftVersionMeta;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
 import net.fabricmc.loom.task.launch.GenerateDLIConfigTask;
 import net.fabricmc.loom.task.launch.GenerateLog4jConfigTask;
 import net.fabricmc.loom.task.launch.GenerateRemapClasspathTask;
@@ -86,6 +87,7 @@ public abstract class LoomTasks implements Runnable {
 
 		getTasks().register("generateDLIConfig", GenerateDLIConfigTask.class, t -> {
 			t.setDescription("Generate the DevLaunchInjector config file");
+			t.dependsOn(MinecraftProvider.VALIDATE_METADATA_TASK);
 
 			// Must allow these IDE files to be generated first
 			t.mustRunAfter("eclipse");
@@ -99,6 +101,7 @@ public abstract class LoomTasks implements Runnable {
 		});
 
 		getTasks().register("configureLaunch", task -> {
+			task.dependsOn(InstallerDataTaskConfiguration.SCAN_INSTALLER_DATA_TASK);
 			task.dependsOn(getTasks().named("generateDLIConfig"));
 			task.dependsOn(getTasks().named("generateLog4jConfig"));
 
@@ -128,14 +131,7 @@ public abstract class LoomTasks implements Runnable {
 				return;
 			}
 
-			final MinecraftVersionMeta versionInfo = extension.getMinecraftProvider().getVersionInfo();
-
-			if (versionInfo == null) {
-				// Something has gone wrong, don't register the task.
-				return;
-			}
-
-			registerClientSetupTasks(getTasks(), versionInfo.hasNativesToExtract());
+			registerClientSetupTasks(getTasks());
 		});
 	}
 
@@ -146,10 +142,6 @@ public abstract class LoomTasks implements Runnable {
 					t.setDescription("Migrates source code mappings to a new version.");
 				});
 
-				return;
-			}
-
-			if (!SourceSetHelper.getFirstSrcDir(sourceSet).exists()) {
 				return;
 			}
 
@@ -301,24 +293,21 @@ public abstract class LoomTasks implements Runnable {
 		});
 	}
 
-	private static void registerClientSetupTasks(TaskContainer tasks, boolean extractNatives) {
+	private static void registerClientSetupTasks(TaskContainer tasks) {
 		tasks.register("downloadAssets", DownloadAssetsTask.class, t -> {
 			t.setDescription("Downloads required game assets for Minecraft.");
+			t.dependsOn(MinecraftProvider.VALIDATE_METADATA_TASK);
 		});
 
-		if (extractNatives) {
-			tasks.register("extractNatives", ExtractNativesTask.class, t -> {
-				t.setDescription("Extracts the Minecraft platform specific natives.");
-			});
-		}
+		tasks.register("extractNatives", ExtractNativesTask.class, t -> {
+			t.setDescription("Extracts the Minecraft platform specific natives.");
+		});
 
 		tasks.register("configureClientLaunch", task -> {
 			task.dependsOn(tasks.named("downloadAssets"));
 			task.dependsOn(tasks.named("configureLaunch"));
 
-			if (extractNatives) {
-				task.dependsOn(tasks.named("extractNatives"));
-			}
+			task.dependsOn(tasks.named("extractNatives"));
 
 			task.setDescription("Setup the required files to launch the Minecraft client");
 			task.setGroup(Constants.TaskGroup.FABRIC);

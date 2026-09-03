@@ -68,6 +68,7 @@ import org.slf4j.LoggerFactory;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
+import net.fabricmc.loom.configuration.InstallerDataTaskConfiguration;
 import net.fabricmc.loom.task.service.ClientEntriesService;
 import net.fabricmc.loom.task.service.JarManifestService;
 import net.fabricmc.loom.util.Check;
@@ -134,6 +135,7 @@ public abstract class AbstractRemapJarTask extends Jar {
 
 	@Inject
 	public AbstractRemapJarTask() {
+		dependsOn(InstallerDataTaskConfiguration.SCAN_INSTALLER_DATA_TASK);
 		from(getProject().zipTree(getInputFile()));
 		getSourceNamespace().convention(MappingsNamespace.NAMED.toString()).finalizeValueOnRead();
 		getTargetNamespace().convention(MappingsNamespace.INTERMEDIARY.toString()).finalizeValueOnRead();

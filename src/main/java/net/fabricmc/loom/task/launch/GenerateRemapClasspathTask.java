@@ -32,6 +32,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import javax.inject.Inject;
+
 import org.gradle.api.artifacts.ConfigurationContainer;
 import org.gradle.api.file.ConfigurableFileCollection;
 import org.gradle.api.file.RegularFileProperty;
@@ -41,6 +43,10 @@ import org.gradle.api.tasks.PathSensitive;
 import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
 import org.gradle.work.DisableCachingByDefault;
+import org.gradle.workers.WorkAction;
+import org.gradle.workers.WorkParameters;
+import org.gradle.workers.WorkQueue;
+import org.gradle.workers.WorkerExecutor;
 
 import net.fabricmc.loom.api.RemapConfigurationSettings;
 import net.fabricmc.loom.task.AbstractLoomTask;
@@ -55,6 +61,9 @@ public abstract class GenerateRemapClasspathTask extends AbstractLoomTask {
 	@OutputFile
 	public abstract RegularFileProperty getRemapClasspathFile();
 
+	@Inject
+	protected abstract WorkerExecutor getWorkerExecutor();
+
 	public GenerateRemapClasspathTask() {
 		final ConfigurationContainer configurations = getProject().getConfigurations();
 
@@ -64,25 +73,40 @@ public abstract class GenerateRemapClasspathTask extends AbstractLoomTask {
 				.map(configurations::named)
 				.forEach(getRemapClasspath()::from);
 
-		for (Path minecraftJar : getExtension().getMinecraftJars(getExtension().getProductionNamespaceEnum().get())) {
-			getRemapClasspath().from(minecraftJar.toFile());
-		}
+		getRemapClasspath().from(getExtension().getProductionNamespaceEnum().map(getExtension()::getMinecraftJarsCollection));
 
 		getRemapClasspathFile().set(getExtension().getFiles().getRemapClasspathFile());
 	}
 
 	@TaskAction
 	public void run() {
-		final List<File> remapClasspath = new ArrayList<>(getRemapClasspath().getFiles());
+		final WorkQueue workQueue = getWorkerExecutor().noIsolation();
+		workQueue.submit(GenerateRemapClasspathAction.class, parameters -> {
+			parameters.getRemapClasspath().from(getRemapClasspath());
+			parameters.getRemapClasspathFile().set(getRemapClasspathFile());
+		});
+	}
 
-		String str = remapClasspath.stream()
-				.map(File::getAbsolutePath)
-				.collect(Collectors.joining(File.pathSeparator));
+	public interface Parameters extends WorkParameters {
+		ConfigurableFileCollection getRemapClasspath();
+		RegularFileProperty getRemapClasspathFile();
+	}
 
-		try {
-			Files.writeString(getRemapClasspathFile().getAsFile().get().toPath(), str);
-		} catch (IOException e) {
-			throw new RuntimeException("Failed to generate remap classpath", e);
+	public abstract static class GenerateRemapClasspathAction implements WorkAction<Parameters> {
+		@Override
+		public void execute() {
+			final List<File> remapClasspath = new ArrayList<>(getParameters().getRemapClasspath().getFiles());
+			final String str = remapClasspath.stream()
+					.map(File::getAbsolutePath)
+					.collect(Collectors.joining(File.pathSeparator));
+			final Path output = getParameters().getRemapClasspathFile().get().getAsFile().toPath();
+
+			try {
+				Files.createDirectories(output.getParent());
+				Files.writeString(output, str);
+			} catch (IOException e) {
+				throw new RuntimeException("Failed to generate remap classpath", e);
+			}
 		}
 	}
 }

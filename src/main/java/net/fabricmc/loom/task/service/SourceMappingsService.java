@@ -24,52 +24,44 @@
 
 package net.fabricmc.loom.task.service;
 
-import java.io.IOException;
-import java.io.Reader;
 import java.io.UncheckedIOException;
-import java.io.Writer;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import org.gradle.api.Project;
 import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.Property;
 import org.gradle.api.provider.Provider;
+import org.gradle.api.tasks.TaskProvider;
 import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.InputFile;
 import org.gradle.api.tasks.Optional;
 import org.gradle.api.tasks.PathSensitive;
 import org.gradle.api.tasks.PathSensitivity;
 import org.jspecify.annotations.Nullable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
-import net.fabricmc.loom.configuration.ConfigContextImpl;
-import net.fabricmc.loom.configuration.processors.MappingProcessorContextImpl;
 import net.fabricmc.loom.configuration.processors.MinecraftJarProcessorManager;
 import net.fabricmc.loom.configuration.providers.mappings.MappingConfiguration;
 import net.fabricmc.loom.configuration.providers.mappings.RemapMappingConfiguration;
+import net.fabricmc.loom.configuration.providers.mappings.tiny.TinyJarInfo;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftTaskGraph;
 import net.fabricmc.loom.api.decompilers.JavadocStyle;
 import net.fabricmc.loom.task.GenerateSourcesTask;
+import net.fabricmc.loom.task.PrepareSourceMappingsTask;
 import net.fabricmc.loom.util.Checksum;
-import net.fabricmc.loom.util.service.ScopedServiceFactory;
+import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.service.Service;
 import net.fabricmc.loom.util.service.ServiceFactory;
 import net.fabricmc.loom.util.service.ServiceType;
-import net.fabricmc.mappingio.MappingReader;
-import net.fabricmc.mappingio.adapter.MappingSourceNsSwitch;
-import net.fabricmc.mappingio.format.tiny.Tiny2FileWriter;
-import net.fabricmc.mappingio.tree.MemoryMappingTree;
 
 /// Provides mappings for decompilation (MC *source* code).
 /// This also works in projects with disabled obfuscation
 /// where the mappings are just based on javadocs.
 public class SourceMappingsService extends Service<SourceMappingsService.Options> {
 	public static final ServiceType<Options, SourceMappingsService> TYPE = new ServiceType<>(Options.class, SourceMappingsService.class);
-	private static final Logger LOGGER = LoggerFactory.getLogger(SourceMappingsService.class);
+	public static final String PREPARE_SOURCE_MAPPINGS_TASK = "prepareMinecraftSourceMappings";
+	private static final String EMPTY_MAPPINGS = "tiny\t2\t0\tofficial\n";
 
 	public interface Options extends Service.Options {
 		@InputFile
@@ -84,23 +76,11 @@ public class SourceMappingsService extends Service<SourceMappingsService.Options
 		Property<JavadocStyle> getJavadocStyle();
 	}
 
-	public static Provider<Options> create(Project project) {
-		final Property<String> hash = project.getObjects().property(String.class);
-		final Path mappings = getMappings(project, hash);
-
-		return TYPE.create(project, options -> {
-			options.getMappings().fileValue(project.file(mappings));
-			options.getProcessorHash().set(hash);
-			MappingConfiguration mappingConfiguration = LoomGradleExtension.get(project).getMappingConfigurationOrNull();
-			options.getJavadocStyle().set(mappingConfiguration != null ? mappingConfiguration.getJavadocStyle() : JavadocStyle.HTML);
-		});
-	}
-
-	private static Path getMappings(Project project, Property<String> hashProperty) {
+	public static Provider<Options> create(GenerateSourcesTask generateSourcesTask) {
+		final Project project = generateSourcesTask.getProject();
 		final LoomGradleExtension extension = LoomGradleExtension.get(project);
 		final MinecraftJarProcessorManager jarProcessor = MinecraftJarProcessorManager.create(project);
 		final Path dir = extension.getFiles().getProjectPersistentCache().toPath().resolve("source_mappings");
-		final Path emptyMappingsPath = dir.resolve("empty.tiny"); // empty base mappings for unobf
 		final boolean disableObf = extension.disableObfuscation();
 		final MappingConfiguration mappingConfiguration = extension.getMappingConfigurationOrNull();
 
@@ -108,92 +88,115 @@ public class SourceMappingsService extends Service<SourceMappingsService.Options
 			throw new IllegalStateException("Mappings have not been configured");
 		}
 
-		if (mappingConfiguration == null && (!Files.exists(emptyMappingsPath) || extension.refreshDeps())) {
-			try {
-				Files.createDirectories(dir);
-				Files.deleteIfExists(emptyMappingsPath);
-				Files.writeString(emptyMappingsPath, "tiny\t2\t0\tofficial\n", StandardCharsets.UTF_8);
-			} catch (IOException e) {
-				throw new UncheckedIOException("Failed to create empty source mappings", e);
-			}
-		}
-
 		final String processorHash = jarProcessor != null ? jarProcessor.getSourceMappingsHash() : "none";
 		final String mappingsHash = mappingConfiguration != null
 				? mappingConfiguration.getMappingsHash()
-				: Checksum.of(emptyMappingsPath).sha256().hex();
+				: Checksum.of(EMPTY_MAPPINGS).sha256().hex();
 		final String hash = Checksum.of(processorHash + ":" + mappingsHash).sha1().hex();
-		hashProperty.set(hash);
+		final Path outputMappings = dir.resolve(hash + ".tiny");
+		final TaskProvider<PrepareSourceMappingsTask> prepareTask = registerPreparationTask(
+				project,
+				extension,
+				mappingConfiguration,
+				jarProcessor,
+				outputMappings
+		);
+		generateSourcesTask.dependsOn(prepareTask);
 
-		if (jarProcessor == null) {
-			if (mappingConfiguration instanceof RemapMappingConfiguration remapMappingConfiguration) {
-				LOGGER.info("No jar processor found, using configured source mappings");
-				return remapMappingConfiguration.tinyMappings;
-			} else if (mappingConfiguration == null) {
-				LOGGER.info("No jar processor found, using empty source mappings");
-				return emptyMappingsPath;
-			}
-		}
-
-		final Path path = dir.resolve(hash + ".tiny");
-
-		if (Files.exists(path) && !extension.refreshDeps()) {
-			LOGGER.debug("Using cached source mappings");
-			return path;
-		}
-
-		LOGGER.info("Creating source mappings for hash {}", hash);
-
-		try {
-			Files.createDirectories(dir);
-			Files.deleteIfExists(path);
-			createMappings(project, jarProcessor, mappingConfiguration, emptyMappingsPath, path);
-		} catch (IOException e) {
-			throw new UncheckedIOException("Failed to create source mappings", e);
-		}
-
-		return path;
+		return TYPE.create(project, options -> {
+			options.getMappings().set(prepareTask.flatMap(PrepareSourceMappingsTask::getOutputMappings));
+			options.getProcessorHash().set(hash);
+			options.getJavadocStyle().set(mappingConfiguration != null ? mappingConfiguration.getJavadocStyle() : JavadocStyle.HTML);
+		});
 	}
 
-	private static void createMappings(Project project, @Nullable MinecraftJarProcessorManager jarProcessor, @Nullable MappingConfiguration mappingConfiguration, Path emptyMappings, Path outputMappings) throws IOException {
-		LoomGradleExtension extension = LoomGradleExtension.get(project);
-		MemoryMappingTree mappingTree = new MemoryMappingTree();
-		String sourceNamespace = !extension.disableObfuscation() && extension.getUseIntermediateMappings().get()
+	private static TaskProvider<PrepareSourceMappingsTask> registerPreparationTask(Project project, LoomGradleExtension extension, @Nullable MappingConfiguration mappingConfiguration, @Nullable MinecraftJarProcessorManager jarProcessor, Path outputMappings) {
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(project);
+
+		if (taskGraph.hasProducer(outputMappings)) {
+			return project.getTasks().named(PREPARE_SOURCE_MAPPINGS_TASK, PrepareSourceMappingsTask.class);
+		}
+
+		final MinecraftJarProcessorManager.SourceMappingsTaskConfiguration processorConfiguration;
+
+		try {
+			processorConfiguration = jarProcessor != null
+					? jarProcessor.getSourceMappingsTaskConfiguration()
+					: new MinecraftJarProcessorManager.SourceMappingsTaskConfiguration(java.util.List.of(), java.util.List.of(), java.util.List.of());
+		} catch (java.io.IOException e) {
+			throw new UncheckedIOException("Failed to configure source mappings task", e);
+		}
+
+		final Path inputMappings;
+		final String inputMappingsEntry;
+
+		if (mappingConfiguration instanceof RemapMappingConfiguration remapMappingConfiguration) {
+			inputMappings = remapMappingConfiguration.tinyMappings;
+			inputMappingsEntry = null;
+		} else if (mappingConfiguration != null) {
+			inputMappings = mappingConfiguration.getInputJar();
+			inputMappingsEntry = TinyJarInfo.MAPPINGS_PATH;
+		} else {
+			inputMappings = null;
+			inputMappingsEntry = null;
+		}
+
+		final String mappingsSourceNamespace = !extension.disableObfuscation() && extension.getUseIntermediateMappings().get()
 				? MappingsNamespace.INTERMEDIARY.toString()
 				: MappingsNamespace.OFFICIAL.toString();
+		final String productionNamespace = extension.getProductionNamespace().get();
+		final String outputNamespace = extension.disableObfuscation()
+				? MappingsNamespace.OFFICIAL.toString()
+				: MappingsNamespace.NAMED.toString();
+		final boolean disableObfuscation = extension.disableObfuscation();
+		final boolean normalizeNamespaces = !(jarProcessor == null && mappingConfiguration instanceof RemapMappingConfiguration);
+		final java.util.List<String> mappingTransformations = processorConfiguration.transformations();
+		final java.util.List<java.io.File> transformationSources = processorConfiguration.sources().stream().map(Path::toFile).toList();
+		final java.util.List<String> transformationSourcePaths = processorConfiguration.sources().stream().map(Path::toString).toList();
+		final java.util.List<String> unsupportedProcessors = processorConfiguration.unsupportedProcessors();
+		final java.util.List<Path> processorAnalyses = processorConfiguration.analyses();
 
-		if (mappingConfiguration != null) {
-			try (var serviceFactory = new ScopedServiceFactory()) {
-				mappingConfiguration.getMappingsService(project, serviceFactory).getMappingTree()
-						.accept(new MappingSourceNsSwitch(mappingTree, sourceNamespace));
+		final TaskProvider<PrepareSourceMappingsTask> prepareTask = project.getTasks().register(PREPARE_SOURCE_MAPPINGS_TASK, PrepareSourceMappingsTask.class, task -> {
+			task.setDescription("Prepares mappings used to decompile Minecraft sources.");
+			task.setGroup(Constants.TaskGroup.FABRIC);
+
+			if (inputMappings != null) {
+				task.getInputMappings().fileValue(inputMappings.toFile());
 			}
-		} else {
-			try (Reader reader = Files.newBufferedReader(emptyMappings, StandardCharsets.UTF_8)) {
-				MappingReader.read(reader, new MappingSourceNsSwitch(mappingTree, sourceNamespace));
+
+			if (inputMappingsEntry != null) {
+				task.getInputMappingsEntry().set(inputMappingsEntry);
 			}
+
+			task.getMappingsSourceNamespace().set(mappingsSourceNamespace);
+			task.getProductionNamespace().set(productionNamespace);
+			task.getOutputNamespace().set(outputNamespace);
+			task.getDisableObfuscation().set(disableObfuscation);
+			task.getNormalizeNamespaces().set(normalizeNamespaces);
+			task.getMappingTransformations().set(mappingTransformations);
+			task.getProcessorAnalyses().from(processorAnalyses.stream().map(Path::toFile).toList());
+			task.getProcessorAnalysisPaths().set(processorAnalyses.stream().map(Path::toString).toList());
+			task.getTransformationSources().from(transformationSources);
+
+			if (processorConfiguration.processorSources() != null) {
+				task.getTransformationSources().from(processorConfiguration.processorSources());
+			}
+
+			task.getTransformationSourcePaths().set(transformationSourcePaths);
+			task.getUnsupportedProcessors().set(unsupportedProcessors);
+			task.getOutputMappings().fileValue(outputMappings.toFile());
+		});
+
+		if (inputMappings != null && taskGraph.hasProducer(inputMappings)) {
+			taskGraph.dependsOn(prepareTask, inputMappings);
 		}
 
-		if (jarProcessor != null) {
-			GenerateSourcesTask.MappingsProcessor mappingsProcessor = mappings -> {
-				try (var serviceFactory = new ScopedServiceFactory()) {
-					final var configContext = new ConfigContextImpl(project, serviceFactory, extension);
-					return jarProcessor.processMappings(mappings, new MappingProcessorContextImpl(configContext));
-				} catch (IOException e) {
-					throw new UncheckedIOException(e);
-				}
-			};
-
-			boolean transformed = mappingsProcessor.transform(mappingTree);
-
-			if (!transformed) {
-				LOGGER.info("No mappings processors transformed the mappings");
-			}
+		for (Path processorAnalysis : processorAnalyses) {
+			taskGraph.dependsOn(prepareTask, processorAnalysis);
 		}
 
-		try (Writer writer = Files.newBufferedWriter(outputMappings, StandardCharsets.UTF_8)) {
-			var tiny2Writer = new Tiny2FileWriter(writer, false);
-			mappingTree.accept(new MappingSourceNsSwitch(tiny2Writer, extension.disableObfuscation() ? MappingsNamespace.OFFICIAL.toString() : MappingsNamespace.NAMED.toString()));
-		}
+		taskGraph.registerOutput(outputMappings, prepareTask);
+		return prepareTask;
 	}
 
 	public SourceMappingsService(Options options, ServiceFactory serviceFactory) {
@@ -205,7 +208,7 @@ public class SourceMappingsService extends Service<SourceMappingsService.Options
 	}
 
 	public @Nullable String getProcessorHash() {
-		return getOptions().getProcessorHash().getOrNull();
+		return Checksum.of(getMappingsFile()).sha256().hex();
 	}
 
 	public JavadocStyle getJavadocStyle() {

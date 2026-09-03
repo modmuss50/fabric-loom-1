@@ -24,149 +24,300 @@
 
 package net.fabricmc.loom.configuration.providers.mappings;
 
-import java.io.IOException;
-import java.io.StringWriter;
-import java.io.UncheckedIOException;
-import java.io.Writer;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
+import java.io.File;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
+import java.util.Objects;
 
 import org.gradle.api.Project;
+import org.gradle.api.artifacts.Configuration;
 import org.gradle.api.artifacts.Dependency;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.gradle.api.artifacts.FileCollectionDependency;
+import org.gradle.api.artifacts.ResolutionStrategy;
+import org.gradle.api.file.ConfigurableFileCollection;
+import org.gradle.api.file.FileCollection;
+import org.gradle.api.file.FileSystemLocation;
+import org.gradle.api.provider.Provider;
+import org.gradle.api.tasks.TaskContainer;
+import org.gradle.api.tasks.TaskProvider;
 
 import net.fabricmc.loom.LoomGradleExtension;
-import net.fabricmc.loom.LoomGradlePlugin;
-import net.fabricmc.loom.api.mappings.layered.MappingContext;
-import net.fabricmc.loom.api.mappings.layered.MappingLayer;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
+import net.fabricmc.loom.api.mappings.layered.spec.FileSpec;
+import net.fabricmc.loom.api.mappings.layered.spec.MappingsSpec;
 import net.fabricmc.loom.configuration.ConfigContext;
-import net.fabricmc.loom.configuration.mods.dependency.LocalMavenHelper;
-import net.fabricmc.loom.configuration.providers.mappings.extras.annotations.AnnotationsData;
-import net.fabricmc.loom.configuration.providers.mappings.extras.annotations.AnnotationsLayer;
-import net.fabricmc.loom.configuration.providers.mappings.extras.unpick.UnpickLayer;
-import net.fabricmc.loom.configuration.providers.mappings.unpick.UnpickMetadata;
-import net.fabricmc.loom.configuration.providers.mappings.utils.AddConstructorMappingVisitor;
-import net.fabricmc.loom.util.ZipUtils;
-import net.fabricmc.mappingio.adapter.MappingDstNsReorder;
-import net.fabricmc.mappingio.adapter.MappingSourceNsSwitch;
-import net.fabricmc.mappingio.format.tiny.Tiny2FileWriter;
-import net.fabricmc.mappingio.tree.MemoryMappingTree;
+import net.fabricmc.loom.configuration.providers.mappings.extras.signatures.SignatureFixesSpec;
+import net.fabricmc.loom.configuration.providers.mappings.file.FileMappingsSpec;
+import net.fabricmc.loom.configuration.providers.mappings.intermediary.IntermediaryMappingsSpec;
+import net.fabricmc.loom.configuration.providers.mappings.mojmap.MojangMappingsSpec;
+import net.fabricmc.loom.configuration.providers.mappings.parchment.ParchmentMappingsSpec;
+import net.fabricmc.loom.configuration.providers.mappings.utils.DependencyFileSpec;
+import net.fabricmc.loom.configuration.providers.mappings.utils.LocalFileSpec;
+import net.fabricmc.loom.configuration.providers.mappings.utils.MavenFileSpec;
+import net.fabricmc.loom.configuration.providers.mappings.utils.MinimalExternalModuleDependencyFileSpec;
+import net.fabricmc.loom.configuration.providers.mappings.utils.ProviderFileSpec;
+import net.fabricmc.loom.configuration.providers.mappings.utils.URLFileSpec;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftTaskGraph;
+import net.fabricmc.loom.task.GenerateLayeredMappingsTask;
+import net.fabricmc.loom.util.Checksum;
+import net.fabricmc.loom.util.Constants;
+import net.fabricmc.loom.util.gradle.GradleUtils;
 
-public record LayeredMappingsFactory(LayeredMappingSpec spec) {
-	private static final String GROUP = "loom";
-	private static final String MODULE = "mappings";
-	private static final Logger LOGGER = LoggerFactory.getLogger(LayeredMappingsFactory.class);
+public record LayeredMappingsFactory(LayeredMappingSpec spec, int declarationIndex) {
+	public static final String DEPENDENCY_REASON_PREFIX = "loom-layered:";
+	private static final String TASK_NAME_PREFIX = "generateLayeredMappings";
+	private static final String CONFIGURED_MARKER_PREFIX = "loom.layeredMappings.configured.";
 
-	/*
-	As we no longer have SelfResolvingDependency we now always create the mappings file after evaluation.
-	This works in a similar way to how remapped mods are handled.
-	 */
+	public LayeredMappingsFactory(LayeredMappingSpec spec) {
+		this(spec, 0);
+	}
+
 	public static void afterEvaluate(ConfigContext configContext) {
 		for (LayeredMappingsFactory layeredMappingFactory : configContext.extension().getLayeredMappingFactories()) {
-			try {
-				layeredMappingFactory.evaluate(configContext);
-			} catch (IOException e) {
-				throw new UncheckedIOException("Failed to setup layered mappings: %s".formatted(layeredMappingFactory.mavenNotation()), e);
-			}
-		}
-	}
-
-	private void evaluate(ConfigContext configContext) throws IOException {
-		LOGGER.info("Evaluating layer mapping: {}", mavenNotation());
-
-		final Path mavenRepoDir = configContext.extension().getFiles().getGlobalMinecraftRepo().toPath();
-		final LocalMavenHelper maven = new LocalMavenHelper(GROUP, MODULE, spec().getVersion(), null, mavenRepoDir);
-		final Path jar = resolve(configContext.project());
-		maven.copyToMaven(jar, null);
-	}
-
-	public Path resolve(Project project) throws IOException {
-		final LoomGradleExtension extension = LoomGradleExtension.get(project);
-		final MappingContext mappingContext = new GradleMappingContext(project, spec.getVersion().replace("+", "_").replace(".", "_"));
-		final Path mappingsDir = mappingContext.minecraftProvider().dir("layered").toPath();
-		final Path mappingsZip = mappingsDir.resolve(String.format("%s.%s-%s.jar", GROUP, MODULE, spec.getVersion()));
-
-		if (Files.exists(mappingsZip) && !mappingContext.refreshDeps()) {
-			return mappingsZip;
+			layeredMappingFactory.configure(configContext.project());
 		}
 
-		boolean useIntermediateMappings = extension.getUseIntermediateMappings().get();
-		var processor = new LayeredMappingsProcessor(spec, !useIntermediateMappings);
-		List<MappingLayer> layers = processor.resolveLayers(mappingContext);
-
-		Files.deleteIfExists(mappingsZip);
-
-		writeMapping(processor, layers, mappingsZip, useIntermediateMappings);
-		writeAnnotationData(processor, layers, mappingsZip);
-		writeSignatureFixes(processor, layers, mappingsZip);
-		writeUnpickData(processor, layers, mappingsZip);
-
-		return mappingsZip;
+		// The migrateMappings target is selected through a task option, after the task graph is ready.
+		// Register its built-in Mojang target eagerly, while keeping all file and network work in the task.
+		new LayeredMappingsFactory(LayeredMappingSpecBuilderImpl.buildOfficialMojangMappings()).configure(configContext.project());
 	}
 
 	public Dependency createDependency(Project project) {
-		return project.getDependencies().create(mavenNotation());
+		final String identity = identity();
+		final TaskProvider<GenerateLayeredMappingsTask> task = getOrRegisterTask(project, identity);
+		final ConfigurableFileCollection output = project.files(task.flatMap(GenerateLayeredMappingsTask::getOutputMappings));
+		output.builtBy(task);
+		final Dependency dependency = project.getDependencies().create(output);
+		dependency.because(DEPENDENCY_REASON_PREFIX + identity);
+		return dependency;
+	}
+
+	public Provider<File> createFileProvider(Project project) {
+		final TaskProvider<GenerateLayeredMappingsTask> task = getOrRegisterTask(project, identity());
+		configure(project);
+		return task.flatMap(GenerateLayeredMappingsTask::getOutputMappings).map(file -> file.getAsFile());
 	}
 
 	public String mavenNotation() {
-		return String.format("%s:%s:%s", GROUP, MODULE, spec.getVersion());
+		return "loom:mappings:" + spec.getVersion();
 	}
 
-	private void writeMapping(LayeredMappingsProcessor processor, List<MappingLayer> layers, Path mappingsFile, boolean useIntermediateMappings) throws IOException {
-		MemoryMappingTree mappings = processor.getMappings(layers);
+	private void configure(Project project) {
+		final LoomGradleExtension extension = LoomGradleExtension.get(project);
+		final MinecraftProvider minecraftProvider = extension.getMinecraftProvider();
+		final boolean useIntermediateMappings = extension.getUseIntermediateMappings().get();
+		final String identity = identity();
+		final String configuredMarker = CONFIGURED_MARKER_PREFIX + identity;
 
-		try (Writer writer = new StringWriter()) {
-			var tiny2Writer = new Tiny2FileWriter(writer, false);
-
-			MappingDstNsReorder nsReorder = new MappingDstNsReorder(tiny2Writer, useIntermediateMappings ? List.of(MappingsNamespace.NAMED.toString(), MappingsNamespace.OFFICIAL.toString()) : List.of(MappingsNamespace.NAMED.toString()));
-			MappingSourceNsSwitch nsSwitch = new MappingSourceNsSwitch(nsReorder, useIntermediateMappings ? MappingsNamespace.INTERMEDIARY.toString() : MappingsNamespace.OFFICIAL.toString(), true);
-			AddConstructorMappingVisitor addConstructor = new AddConstructorMappingVisitor(nsSwitch);
-			mappings.accept(addConstructor);
-
-			Files.deleteIfExists(mappingsFile);
-			ZipUtils.add(mappingsFile, "mappings/mappings.tiny", writer.toString().getBytes(StandardCharsets.UTF_8));
-		}
-	}
-
-	private void writeAnnotationData(LayeredMappingsProcessor processor, List<MappingLayer> layers, Path mappingsFile) throws IOException {
-		List<AnnotationsData> annotationsData = processor.getAnnotationsData(layers);
-
-		if (annotationsData.isEmpty()) {
+		if (project.getExtensions().getExtraProperties().has(configuredMarker)) {
 			return;
 		}
 
-		byte[] data = AnnotationsData.GSON.toJson(AnnotationsData.listToJson(annotationsData)).getBytes(StandardCharsets.UTF_8);
+		project.getExtensions().getExtraProperties().set(configuredMarker, true);
+		final Path output = output(project, minecraftProvider, identity);
+		final TaskProvider<GenerateLayeredMappingsTask> task = getOrRegisterTask(project, identity);
+		final Path intermediaryMappings = useIntermediateMappings
+				? IntermediateMappingsService.registerPreparationTask(project, minecraftProvider)
+				: null;
 
-		ZipUtils.add(mappingsFile, AnnotationsLayer.ANNOTATIONS_PATH, data);
-	}
+		task.configure(generateTask -> {
+			generateTask.getLayerFiles().setFrom(Collections.emptyList());
+			generateTask.getLayerFilePaths().set(Collections.emptyList());
+			final List<String> layers = new ArrayList<>();
+			final int[] fileIndex = {0};
 
-	private void writeSignatureFixes(LayeredMappingsProcessor processor, List<MappingLayer> layers, Path mappingsFile) throws IOException {
-		Map<String, String> signatureFixes = processor.getSignatureFixes(layers);
+			for (MappingsSpec<?> layer : spec.layers()) {
+				layers.add(encodeLayer(project, generateTask, layer, useIntermediateMappings, extension.getProductionNamespace().get(), fileIndex));
+			}
 
-		if (signatureFixes == null) {
-			return;
+			generateTask.setDescription("Generates the configured layered Minecraft mappings.");
+			generateTask.setGroup(Constants.TaskGroup.FABRIC);
+			generateTask.getMinecraftMetadata().fileValue(minecraftProvider.getMinecraftMetadataPath().toFile());
+
+			if (intermediaryMappings != null) {
+				generateTask.getIntermediaryMappings().fileValue(intermediaryMappings.toFile());
+			}
+
+			generateTask.getLayers().set(layers);
+			generateTask.getUseIntermediateMappings().set(useIntermediateMappings);
+			generateTask.getDropNonIntermediateRootMethods().set(GradleUtils.getBooleanProperty(project, Constants.Properties.DROP_NON_INTERMEDIATE_ROOT_METHODS));
+			generateTask.getOffline().set(project.getGradle().getStartParameter().isOffline());
+			generateTask.getRefresh().set(extension.refreshDeps());
+			generateTask.getOutputMappings().fileValue(output.toFile());
+		});
+
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(project);
+		taskGraph.dependsOn(task, minecraftProvider.getMinecraftMetadataPath());
+
+		if (intermediaryMappings != null) {
+			taskGraph.dependsOn(task, intermediaryMappings);
 		}
 
-		byte[] data = LoomGradlePlugin.GSON.toJson(signatureFixes).getBytes(StandardCharsets.UTF_8);
-
-		ZipUtils.add(mappingsFile, "extras/record_signatures.json", data);
+		if (!taskGraph.hasProducer(output)) {
+			taskGraph.registerOutput(output, task);
+		}
 	}
 
-	private void writeUnpickData(LayeredMappingsProcessor processor, List<MappingLayer> layers, Path mappingsFile) throws IOException {
-		UnpickLayer.UnpickData unpickData = processor.getUnpickData(layers);
+	private String encodeLayer(Project project, GenerateLayeredMappingsTask task, MappingsSpec<?> layer, boolean useIntermediateMappings, String productionNamespace, int[] fileIndex) {
+		return switch (layer) {
+		case IntermediaryMappingsSpec ignored -> GenerateLayeredMappingsTask.intermediaryLayer();
+		case MojangMappingsSpec mojang -> GenerateLayeredMappingsTask.mojangLayer(mojang.nameSyntheticMembers());
+		case ParchmentMappingsSpec parchment -> GenerateLayeredMappingsTask.parchmentLayer(addFileSource(project, task, parchment.fileSpec(), fileIndex), parchment.removePrefix());
+		case FileMappingsSpec file -> GenerateLayeredMappingsTask.fileLayer(
+				addFileSource(project, task, file.fileSpec(), fileIndex),
+				file.mappingPath(),
+				file.fallbackSourceNamespace().orElse(productionNamespace),
+				file.fallbackTargetNamespace(),
+				file.enigma(),
+				file.unpick(),
+				file.annotations(),
+				file.mergeNamespace().orElse(useIntermediateMappings ? MappingsNamespace.INTERMEDIARY.toString() : MappingsNamespace.OFFICIAL.toString()),
+				file.unpick() ? file.fallbackUnpickConstants().orElse(null) : null
+		);
+		case SignatureFixesSpec signatureFixes -> GenerateLayeredMappingsTask.signatureFixLayer(addFileSource(project, task, signatureFixes.fileSpec(), fileIndex));
+		default -> throw unsupported(layer);
+		};
+	}
 
-		if (unpickData == null) {
-			return;
+	private String addFileSource(Project project, GenerateLayeredMappingsTask task, FileSpec fileSpec, int[] fileIndex) {
+		if (fileSpec instanceof URLFileSpec urlFileSpec) {
+			return GenerateLayeredMappingsTask.urlSource(urlFileSpec.url());
 		}
 
-		byte[] data = UnpickMetadata.toJson(unpickData.metadata()).getBytes(StandardCharsets.UTF_8);
+		final FileSource source = resolveFileSource(project, fileSpec);
+		final int index = fileIndex[0]++;
+		task.getLayerFiles().from(source.files());
+		task.getLayerFilePaths().add(source.file().map(File::getAbsolutePath));
+		task.getLayerFileOrder().add(source.file().map(file -> Checksum.of(file).sha256().hex()));
+		return GenerateLayeredMappingsTask.fileSource(index);
+	}
 
-		ZipUtils.add(mappingsFile, UnpickMetadata.UNPICK_DEFINITIONS_PATH, unpickData.definitions());
-		ZipUtils.add(mappingsFile, UnpickMetadata.UNPICK_METADATA_PATH, data);
+	private FileSource resolveFileSource(Project project, FileSpec fileSpec) {
+		if (fileSpec instanceof LocalFileSpec localFileSpec) {
+			final Provider<File> file = project.provider(localFileSpec::file);
+			return new FileSource(project.files(file), file);
+		}
+
+		if (fileSpec instanceof ProviderFileSpec providerFileSpec) {
+			final Provider<File> file = providerFileSpec.provider().map(LayeredMappingsFactory::providerValueToFile);
+			return new FileSource(project.files(file), file);
+		}
+
+		if (fileSpec instanceof MavenFileSpec mavenFileSpec) {
+			return resolveDependency(project, project.getDependencies().create(mavenFileSpec.dependencyNotation()));
+		}
+
+		if (fileSpec instanceof MinimalExternalModuleDependencyFileSpec moduleFileSpec) {
+			return resolveDependency(project, project.getDependencies().create(moduleFileSpec.dependency()));
+		}
+
+		if (fileSpec instanceof DependencyFileSpec dependencyFileSpec) {
+			return resolveDependency(project, dependencyFileSpec.dependency());
+		}
+
+		throw new UnsupportedOperationException("Task-backed layered mappings do not support FileSpec implementation " + fileSpec.getClass().getName());
+	}
+
+	private static File providerValueToFile(Object value) {
+		return switch (value) {
+		case File file -> file;
+		case Path path -> path.toFile();
+		case FileSystemLocation location -> location.getAsFile();
+		default -> throw new UnsupportedOperationException(
+				"A provider-backed layered mappings input must resolve to a File, Path, or FileSystemLocation, not " + value.getClass().getName()
+		);
+		};
+	}
+
+	private FileSource resolveDependency(Project project, Dependency dependency) {
+		final FileCollection files;
+
+		if (dependency instanceof FileCollectionDependency fileDependency) {
+			files = fileDependency.getFiles();
+		} else {
+			final Configuration configuration = project.getConfigurations().detachedConfiguration(dependency);
+			configuration.resolutionStrategy(ResolutionStrategy::failOnNonReproducibleResolution);
+			files = configuration;
+		}
+
+		final Provider<File> file = files.getElements().map(elements -> {
+			if (elements.size() != 1) {
+				throw new IllegalStateException("Expected exactly one layered mappings input for " + dependency + ", but found " + elements.size());
+			}
+
+			return elements.iterator().next().getAsFile();
+		});
+		return new FileSource(files, file);
+	}
+
+	private TaskProvider<GenerateLayeredMappingsTask> getOrRegisterTask(Project project, String identity) {
+		final String name = TASK_NAME_PREFIX + identity.substring(0, 16);
+		final TaskContainer tasks = project.getTasks();
+
+		if (tasks.getNames().contains(name)) {
+			return tasks.named(name, GenerateLayeredMappingsTask.class);
+		}
+
+		return tasks.register(name, GenerateLayeredMappingsTask.class, task -> task.getOutputMappings().fileProvider(
+				project.provider(() -> output(project, LoomGradleExtension.get(project).getMinecraftProvider(), identity).toFile())
+		));
+	}
+
+	private String identity() {
+		final StringBuilder builder = new StringBuilder();
+
+		for (MappingsSpec<?> layer : spec.layers()) {
+			builder.append(describeLayer(layer)).append('\n');
+		}
+
+		return Checksum.of(builder.toString()).sha256().hex();
+	}
+
+	private String describeLayer(MappingsSpec<?> layer) {
+		return switch (layer) {
+		case IntermediaryMappingsSpec ignored -> "intermediary";
+		case MojangMappingsSpec mojang -> "mojang:" + mojang.nameSyntheticMembers();
+		case ParchmentMappingsSpec parchment -> "parchment:" + describeFile(parchment.fileSpec()) + ':' + parchment.removePrefix();
+		case FileMappingsSpec file -> "file:" + describeFile(file.fileSpec()) + ':' + file.mappingPath() + ':'
+				+ file.fallbackSourceNamespace() + ':' + file.fallbackTargetNamespace() + ':' + file.enigma() + ':'
+				+ file.unpick() + ':' + file.annotations() + ':' + file.mergeNamespace() + ':' + file.fallbackUnpickConstants();
+		case SignatureFixesSpec signatureFixes -> "signature-fix:" + describeFile(signatureFixes.fileSpec());
+		default -> throw unsupported(layer);
+		};
+	}
+
+	private String describeFile(FileSpec fileSpec) {
+		return switch (fileSpec) {
+		case LocalFileSpec local -> "local:" + local.file().toPath().toAbsolutePath().normalize();
+		case MavenFileSpec maven -> "maven:" + maven.dependencyNotation();
+		case MinimalExternalModuleDependencyFileSpec module -> "minimal-module:" + module.dependency();
+		case DependencyFileSpec dependency -> "dependency:" + dependency.dependency();
+		case ProviderFileSpec ignored -> "provider-declaration:" + declarationIndex;
+		case URLFileSpec url -> "url:" + url.url();
+		default -> throw new UnsupportedOperationException("Task-backed layered mappings do not support FileSpec implementation " + fileSpec.getClass().getName());
+		};
+	}
+
+	private UnsupportedOperationException unsupported(MappingsSpec<?> layer) {
+		return new UnsupportedOperationException("Task-backed layered mappings only support Loom's built-in mappings specs; "
+				+ layer.getClass().getName() + " cannot be serialized for task execution");
+	}
+
+	private static Path output(Project project, MinecraftProvider minecraftProvider, String identity) {
+		return LoomGradleExtension.get(project).getFiles().getProjectPersistentCache().toPath()
+				.resolve("layered")
+				.resolve(minecraftProvider.minecraftVersion())
+				.resolve(identity)
+				.resolve("mappings.jar");
+	}
+
+	private record FileSource(FileCollection files, Provider<File> file) {
+		private FileSource {
+			Objects.requireNonNull(files, "files");
+			Objects.requireNonNull(file, "file");
+		}
 	}
 }

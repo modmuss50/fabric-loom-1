@@ -65,8 +65,22 @@ public final class MappingsMerger {
 
 	@VisibleForTesting
 	public static void mergeAndSaveMappings(Path from, Path out, IntermediateMappingsService intermediateMappingsService) throws IOException {
+		mergeAndSaveMappings(from, out, intermediateMappingsService.getMemoryMappingTree());
+	}
+
+	public static void mergeAndSaveMappings(Path from, Path out, Path intermediaryMappings, String expectedSourceNamespace, boolean legacySplitOfficialNamespace) throws IOException {
+		MemoryMappingTree intermediaryTree = IntermediateMappingsService.createMemoryMappingTree(intermediaryMappings, expectedSourceNamespace);
+
+		if (legacySplitOfficialNamespace) {
+			legacyMergedMergeAndSaveMappings(from, out, intermediaryTree);
+		} else {
+			mergeAndSaveMappings(from, out, intermediaryTree);
+		}
+	}
+
+	private static void mergeAndSaveMappings(Path from, Path out, MemoryMappingTree intermediaryMappings) throws IOException {
 		MemoryMappingTree intermediaryTree = new MemoryMappingTree();
-		intermediateMappingsService.getMemoryMappingTree().accept(new MappingSourceNsSwitch(intermediaryTree, MappingsNamespace.INTERMEDIARY.toString()));
+		intermediaryMappings.accept(new MappingSourceNsSwitch(intermediaryTree, MappingsNamespace.INTERMEDIARY.toString()));
 
 		try (BufferedReader reader = Files.newBufferedReader(from, StandardCharsets.UTF_8)) {
 			Tiny2FileReader.read(reader, intermediaryTree);
@@ -87,8 +101,12 @@ public final class MappingsMerger {
 
 	@VisibleForTesting
 	public static void legacyMergedMergeAndSaveMappings(Path from, Path out, IntermediateMappingsService intermediateMappingsService) throws IOException {
+		legacyMergedMergeAndSaveMappings(from, out, intermediateMappingsService.getMemoryMappingTree());
+	}
+
+	private static void legacyMergedMergeAndSaveMappings(Path from, Path out, MemoryMappingTree intermediateMappings) throws IOException {
 		MemoryMappingTree intermediaryTree = new MemoryMappingTree();
-		intermediateMappingsService.getMemoryMappingTree().accept(intermediaryTree);
+		intermediateMappings.accept(intermediaryTree);
 
 		try (BufferedReader reader = Files.newBufferedReader(from, StandardCharsets.UTF_8)) {
 			Tiny2FileReader.read(reader, intermediaryTree);

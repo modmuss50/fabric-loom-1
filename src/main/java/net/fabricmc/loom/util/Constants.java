@@ -151,8 +151,6 @@ public class Constants {
 		public static final String DISABLE_PROJECT_DEPENDENT_MODS = "fabric.loom.disableProjectDependentMods";
 		public static final String LIBRARY_PROCESSORS = "fabric.loom.libraryProcessors";
 		@ApiStatus.Experimental
-		public static final String TASK_BASED_MINECRAFT = "fabric.loom.experimental.taskBasedMinecraft";
-		@ApiStatus.Experimental
 		public static final String SANDBOX = "fabric.loom.experimental.sandbox";
 		/**
 		 * When set the version of java that will be assumed that the game will run on, this defaults to the current java version.

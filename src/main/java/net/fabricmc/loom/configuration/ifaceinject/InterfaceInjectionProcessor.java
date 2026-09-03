@@ -61,8 +61,10 @@ import net.fabricmc.loom.configuration.processors.MappingProcessing;
 import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.LazyCloseable;
 import net.fabricmc.loom.util.Pair;
+import net.fabricmc.loom.util.TinyRemapperHelper;
 import net.fabricmc.loom.util.ZipUtils;
 import net.fabricmc.loom.util.fmj.FabricModJson;
+import net.fabricmc.mappingio.MappingReader;
 import net.fabricmc.mappingio.tree.MappingTree;
 import net.fabricmc.mappingio.tree.MappingTreeView;
 import net.fabricmc.mappingio.tree.MemoryMappingTree;
@@ -115,41 +117,66 @@ public abstract class InterfaceInjectionProcessor implements MinecraftJarProcess
 	@Override
 	public void processJar(Path jar, Spec spec, ProcessorContext context) throws IOException {
 		List<InjectedInterface> injectedInterfaces = getInjectedInterfaces(spec, context);
+		applyInjectedInterfaces(jar, injectedInterfaces);
+	}
+
+	static void processJarForTask(Path jar, Spec spec, boolean includesClient, boolean disableObfuscation, String productionNamespace, @Nullable Path mappingsFile, List<Path> remapClasspath, Set<String> knownIndyBsms) throws IOException {
+		if (disableObfuscation) {
+			applyInjectedInterfaces(jar, spec.injectedInterfaces());
+			return;
+		}
+
+		if (mappingsFile == null) {
+			throw new IllegalArgumentException("Mappings are required to remap injected interfaces");
+		}
+
+		final MemoryMappingTree mappings = new MemoryMappingTree();
+		MappingReader.read(mappingsFile, mappings);
+		final TinyRemapper tinyRemapper = TinyRemapperHelper.getTinyRemapper(
+				mappings,
+				productionNamespace,
+				MappingsNamespace.NAMED.toString(),
+				false,
+				knownIndyBsms,
+				builder -> { }
+		);
 
 		try {
-			ZipUtils.transformAsync(jar, getTransformers(injectedInterfaces));
-		} catch (IOException e) {
-			throw new RuntimeException("Failed to apply interface injections to " + jar, e);
+			for (Path classpath : remapClasspath) {
+				tinyRemapper.readClassPath(classpath);
+			}
+
+			applyInjectedInterfaces(jar, remapInjectedInterfaces(spec, includesClient, mappings, productionNamespace, tinyRemapper));
+		} finally {
+			tinyRemapper.finish();
 		}
 	}
 
-	private List<InjectedInterface> getInjectedInterfaces(Spec spec, ProcessorContext context) throws IOException {
+	private static List<InjectedInterface> getInjectedInterfaces(Spec spec, ProcessorContext context) throws IOException {
 		if (context.disableObfuscation()) {
 			return spec.injectedInterfaces();
 		}
 
-		// Remap from productionNamespace->named
-		final MemoryMappingTree mappings = context.getMappings();
-		final int productionIndex = mappings.getNamespaceId(context.getProductionNamespace().toString());
-		final int namedIndex = mappings.getNamespaceId(MappingsNamespace.NAMED.toString());
-
 		try (LazyCloseable<TinyRemapper> tinyRemapper = context.createRemapper(context.getProductionNamespace(), MappingsNamespace.NAMED)) {
-			final List<InjectedInterface> remappedInjectedInterfaces = spec.injectedInterfaces().stream()
-					.filter(injectedInterface -> {
-						return context.includesClient() // The client jar depends on the server, so always apply all to it
-								|| !spec.clientOnlyModIds.contains(injectedInterface.modId()); // Or the mod is NOT only found on the client classpath, so we can apply it to the server jar
-					})
-					.map(injectedInterface -> remap(
-							injectedInterface,
-							s -> mappings.mapClassName(s, productionIndex, namedIndex),
-							tinyRemapper.get().getEnvironment().getRemapper()
-					))
-					.toList();
-			return remappedInjectedInterfaces;
+			return remapInjectedInterfaces(spec, context.includesClient(), context.getMappings(), context.getProductionNamespace().toString(), tinyRemapper.get());
 		}
 	}
 
-	private InjectedInterface remap(InjectedInterface in, Function<String, String> remapper, TrRemapper signatureRemapper) {
+	private static List<InjectedInterface> remapInjectedInterfaces(Spec spec, boolean includesClient, MemoryMappingTree mappings, String productionNamespace, TinyRemapper tinyRemapper) {
+		final int productionIndex = mappings.getNamespaceId(productionNamespace);
+		final int namedIndex = mappings.getNamespaceId(MappingsNamespace.NAMED.toString());
+
+		return spec.injectedInterfaces().stream()
+				.filter(injectedInterface -> includesClient || !spec.clientOnlyModIds.contains(injectedInterface.modId()))
+				.map(injectedInterface -> remap(
+						injectedInterface,
+						s -> mappings.mapClassName(s, productionIndex, namedIndex),
+						tinyRemapper.getEnvironment().getRemapper()
+				))
+				.toList();
+	}
+
+	private static InjectedInterface remap(InjectedInterface in, Function<String, String> remapper, TrRemapper signatureRemapper) {
 		String generics = null;
 
 		if (in.generics() != null) {
@@ -165,7 +192,15 @@ public abstract class InterfaceInjectionProcessor implements MinecraftJarProcess
 		);
 	}
 
-	private List<Pair<String, ZipUtils.UnsafeUnaryOperator<byte[]>>> getTransformers(List<InjectedInterface> injectedInterfaces) {
+	private static void applyInjectedInterfaces(Path jar, List<InjectedInterface> injectedInterfaces) throws IOException {
+		try {
+			ZipUtils.transformAsync(jar, getTransformers(injectedInterfaces));
+		} catch (IOException e) {
+			throw new RuntimeException("Failed to apply interface injections to " + jar, e);
+		}
+	}
+
+	private static List<Pair<String, ZipUtils.UnsafeUnaryOperator<byte[]>>> getTransformers(List<InjectedInterface> injectedInterfaces) {
 		return injectedInterfaces.stream()
 				.collect(Collectors.groupingBy(InjectedInterface::className))
 				.entrySet()
@@ -176,7 +211,7 @@ public abstract class InterfaceInjectionProcessor implements MinecraftJarProcess
 				}).toList();
 	}
 
-	private ZipUtils.UnsafeUnaryOperator<byte[]> getTransformer(List<InjectedInterface> injectedInterfaces) {
+	private static ZipUtils.UnsafeUnaryOperator<byte[]> getTransformer(List<InjectedInterface> injectedInterfaces) {
 		return input -> {
 			final ClassReader reader = new ClassReader(input);
 			final ClassWriter writer = new ClassWriter(0);

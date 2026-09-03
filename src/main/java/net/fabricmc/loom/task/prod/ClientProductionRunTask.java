@@ -26,13 +26,20 @@ package net.fabricmc.loom.task.prod;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.Reader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.Objects;
 
 import javax.inject.Inject;
 
 import org.gradle.api.Action;
 import org.gradle.api.file.DirectoryProperty;
+import org.gradle.api.file.FileCollection;
+import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.Property;
 import org.gradle.api.tasks.Input;
+import org.gradle.api.tasks.InputFile;
 import org.gradle.api.tasks.InputFiles;
 import org.gradle.api.tasks.Nested;
 import org.gradle.api.tasks.Optional;
@@ -42,7 +49,12 @@ import org.gradle.process.ExecSpec;
 import org.gradle.work.DisableCachingByDefault;
 import org.jetbrains.annotations.ApiStatus;
 
+import net.fabricmc.loom.LoomGradlePlugin;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
+import net.fabricmc.loom.configuration.InstallerDataTaskConfiguration;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftTaskGraph;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftVersionMeta;
 import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.Platform;
 import net.fabricmc.loom.util.XVFBExistsValueSource;
@@ -79,8 +91,9 @@ public abstract non-sealed class ClientProductionRunTask extends AbstractProduct
 	}
 
 	// Internal options
-	@Input
-	protected abstract Property<String> getAssetsIndex();
+	@InputFile
+	@PathSensitive(PathSensitivity.NONE)
+	protected abstract RegularFileProperty getMinecraftMetadata();
 
 	@InputFiles
 	@PathSensitive(PathSensitivity.ABSOLUTE)
@@ -93,26 +106,28 @@ public abstract non-sealed class ClientProductionRunTask extends AbstractProduct
 				.orElse(false)
 		);
 
-		getAssetsIndex().set(getExtension().getMinecraftVersion()
-				.map(minecraftVersion -> getExtension()
-						.getMinecraftProvider()
-						.getVersionInfo()
-						.assetIndex()
-						.fabricId(minecraftVersion)
-				)
-		);
+		getMinecraftMetadata().fileValue(getExtension().getMinecraftProvider().getMinecraftMetadataPath().toFile());
 		getAssetsDir().set(new File(getExtension().getFiles().getUserCache(), "assets"));
 		getMainClass().convention("net.fabricmc.loader.impl.launch.knot.KnotClient");
 
-		getClasspath().from(getExtension().getMinecraftProvider().getMinecraftClientJar());
-		getClasspath().from(detachedConfigurationProvider("net.fabricmc:fabric-loader:%s", getProjectLoaderVersion()));
+		getClasspath().from(getProject().provider(() -> MinecraftTaskGraph.get(getProject())
+				.files(getExtension().getMinecraftProvider().getMinecraftClientJar().toPath())));
+		getClasspath().builtBy(getProject().provider(() -> MinecraftTaskGraph.get(getProject())
+				.getProducer(getExtension().getMinecraftProvider().getMinecraftClientJar().toPath())));
+		getClasspath().from(InstallerDataTaskConfiguration.getInstallerJars(getProject()));
+		getClasspath().from(getExtension().getProductionNamespaceEnum().zip(getExtension().getMinecraftVersion(), (namespace, minecraftVersion) -> {
+			if (namespace != MappingsNamespace.INTERMEDIARY) {
+				return (FileCollection) getProject().files();
+			}
 
-		if (getExtension().getProductionNamespaceEnum().get() == MappingsNamespace.INTERMEDIARY) {
-			getClasspath().from(detachedConfigurationProvider("net.fabricmc:intermediary:%s", getExtension().getMinecraftVersion()));
-		}
+			return getProject().getConfigurations().detachedConfiguration(
+					getProject().getDependencies().create("net.fabricmc:intermediary:%s".formatted(minecraftVersion))
+			);
+		}));
 
 		getClasspath().from(getProject().getConfigurations().named(Constants.Configurations.MINECRAFT_TEST_CLIENT_RUNTIME_LIBRARIES));
 
+		dependsOn(MinecraftProvider.VALIDATE_METADATA_TASK);
 		dependsOn("downloadAssets");
 	}
 
@@ -156,13 +171,27 @@ public abstract non-sealed class ClientProductionRunTask extends AbstractProduct
 		super.configureProgramArgs(exec);
 
 		exec.args(
-				"--assetIndex", getAssetsIndex().get(),
+				"--assetIndex", readAssetsIndex(),
 				"--assetsDir", getAssetsDir().get().getAsFile().getAbsolutePath(),
 				"--gameDir", getRunDir().get().getAsFile().getAbsolutePath()
 		);
 
 		if (getTracyCapture().isPresent()) {
 			exec.args("--tracy");
+		}
+	}
+
+	private String readAssetsIndex() {
+		final var metadataFile = getMinecraftMetadata().get().getAsFile().toPath();
+
+		try (Reader reader = Files.newBufferedReader(metadataFile, StandardCharsets.UTF_8)) {
+			final MinecraftVersionMeta metadata = Objects.requireNonNull(
+					LoomGradlePlugin.GSON.fromJson(reader, MinecraftVersionMeta.class),
+					"Minecraft metadata is empty"
+			);
+			return metadata.assetIndex().fabricId(getExtension().getMinecraftVersion().get());
+		} catch (IOException e) {
+			throw new RuntimeException("Failed to read Minecraft metadata", e);
 		}
 	}
 }

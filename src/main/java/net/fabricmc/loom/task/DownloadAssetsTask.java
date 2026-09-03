@@ -1,7 +1,7 @@
 /*
  * This file is part of fabric-loom, licensed under the MIT License (MIT).
  *
- * Copyright (c) 2016-2021 FabricMC
+ * Copyright (c) 2016-2026 FabricMC
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -26,124 +26,241 @@ package net.fabricmc.loom.task;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.Reader;
+import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Objects;
 
 import javax.inject.Inject;
 
+import org.gradle.api.file.DirectoryProperty;
 import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.Property;
 import org.gradle.api.tasks.Input;
-import org.gradle.api.tasks.Nested;
-import org.gradle.api.tasks.OutputDirectory;
+import org.gradle.api.tasks.InputFile;
+import org.gradle.api.tasks.LocalState;
+import org.gradle.api.tasks.OutputFile;
+import org.gradle.api.tasks.PathSensitive;
+import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
-import org.gradle.internal.logging.progress.ProgressLoggerFactory;
 import org.gradle.work.DisableCachingByDefault;
+import org.gradle.workers.WorkAction;
+import org.gradle.workers.WorkParameters;
+import org.gradle.workers.WorkQueue;
+import org.gradle.workers.WorkerExecutor;
 
 import net.fabricmc.loom.LoomGradlePlugin;
 import net.fabricmc.loom.api.RunConfiguration;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftVersionMeta;
 import net.fabricmc.loom.configuration.providers.minecraft.assets.AssetIndex;
 import net.fabricmc.loom.util.MirrorUtil;
+import net.fabricmc.loom.util.download.Download;
+import net.fabricmc.loom.util.download.DownloadBuilder;
 import net.fabricmc.loom.util.download.DownloadExecutor;
-import net.fabricmc.loom.util.download.DownloadFactory;
-import net.fabricmc.loom.util.download.GradleDownloadProgressListener;
-import net.fabricmc.loom.util.gradle.ProgressGroup;
 
-@DisableCachingByDefault
+@DisableCachingByDefault(because = "Downloaded Minecraft assets should not be stored in the build cache")
 public abstract class DownloadAssetsTask extends AbstractLoomTask {
-	@Input
-	public abstract Property<String> getAssetsHash();
+	@InputFile
+	@PathSensitive(PathSensitivity.NONE)
+	public abstract RegularFileProperty getMinecraftMetadata();
 
 	@Input
 	public abstract Property<Integer> getDownloadThreads();
 
 	@Input
-	public abstract Property<String> getMinecraftVersion();
-
-	@Input
 	public abstract Property<String> getResourcesBaseUrl();
 
 	@Input
-	protected abstract Property<String> getAssetsIndexJson();
+	public abstract Property<Boolean> getOffline();
 
-	@OutputDirectory
-	public abstract RegularFileProperty getAssetsDirectory();
+	@Input
+	public abstract Property<Boolean> getRefresh();
 
-	@OutputDirectory
-	public abstract RegularFileProperty getLegacyResourcesDirectory();
+	@LocalState
+	public abstract DirectoryProperty getAssetsDirectory();
+
+	@LocalState
+	public abstract DirectoryProperty getLegacyResourcesDirectory();
+
+	@OutputFile
+	public abstract RegularFileProperty getCompletionMarker();
 
 	@Inject
-	protected abstract ProgressLoggerFactory getProgressLoggerFactory();
-
-	@Nested
-	protected abstract DownloadFactory getDownloadFactory();
+	protected abstract WorkerExecutor getWorkerExecutor();
 
 	@Inject
 	public DownloadAssetsTask() {
-		final MinecraftVersionMeta versionInfo = getExtension().getMinecraftProvider().getVersionInfo();
 		final File assetsDir = new File(getExtension().getFiles().getUserCache(), "assets");
+		final RunConfiguration client = getExtension().getRunConfigs().findByName("client");
 
+		getMinecraftMetadata().fileValue(getExtension().getMinecraftProvider().getMinecraftMetadataPath().toFile());
 		getAssetsDirectory().set(assetsDir);
-		getAssetsHash().set(versionInfo.assetIndex().sha1());
-		getDownloadThreads().convention(Math.min(Runtime.getRuntime().availableProcessors(), 10));
-		getMinecraftVersion().set(versionInfo.id());
-		getMinecraftVersion().finalizeValue();
+		getCompletionMarker().fileValue(getExtension().getFiles().getProjectPersistentCache().toPath()
+				.resolve("assets")
+				.resolve("download-complete.marker")
+				.toFile());
 
-		if (versionInfo.assets().equals("legacy")) {
-			getLegacyResourcesDirectory().set(new File(assetsDir, "/legacy/" + versionInfo.id()));
+		if (client != null) {
+			getLegacyResourcesDirectory().set(client.getRunDirectory().dir("resources"));
 		} else {
-			// pre-1.6 resources
-			RunConfiguration client = getExtension().getRunConfigs().findByName("client");
-			File runDir = client != null ? client.getRunDirectory().getAsFile().get() : getProject().file("run");
-			getLegacyResourcesDirectory().set(new File(runDir, "resources"));
+			getLegacyResourcesDirectory().set(getProject().getLayout().getProjectDirectory().dir("run/resources"));
 		}
 
+		getDownloadThreads().convention(Math.min(Runtime.getRuntime().availableProcessors(), 10));
 		getResourcesBaseUrl().set(MirrorUtil.getResourcesBase(getProject()));
-		getResourcesBaseUrl().finalizeValue();
+		getOffline().set(getProject().getGradle().getStartParameter().isOffline());
+		getRefresh().set(getExtension().refreshDeps());
+		getOutputs().upToDateWhen(task -> {
+			final DownloadAssetsTask downloadAssets = (DownloadAssetsTask) task;
+			return !downloadAssets.getRefresh().get() && downloadAssets.hasAllAssets();
+		});
+	}
 
-		getAssetsIndexJson().set(LoomGradlePlugin.GSON.toJson(getExtension().getMinecraftProvider().getVersionInfo().assetIndex()));
+	private boolean hasAllAssets() {
+		try {
+			final MinecraftVersionMeta versionInfo = LoomGradlePlugin.GSON.fromJson(
+					Files.readString(getMinecraftMetadata().get().getAsFile().toPath(), StandardCharsets.UTF_8),
+					MinecraftVersionMeta.class
+			);
 
-		getAssetsHash().finalizeValue();
-		getAssetsDirectory().finalizeValueOnRead();
-		getLegacyResourcesDirectory().finalizeValueOnRead();
+			if (versionInfo == null) {
+				return false;
+			}
+
+			final Path assetsDirectory = getAssetsDirectory().get().getAsFile().toPath();
+			final Path indexFile = assetsDirectory.resolve("indexes")
+					.resolve(versionInfo.assetIndex().fabricId(versionInfo.id()) + ".json");
+
+			if (!Files.isRegularFile(indexFile)) {
+				return false;
+			}
+
+			final AssetIndex assetIndex = LoomGradlePlugin.GSON.fromJson(
+					Files.readString(indexFile, StandardCharsets.UTF_8),
+					AssetIndex.class
+			);
+
+			if (assetIndex == null) {
+				return false;
+			}
+
+			final Path legacyResources = versionInfo.assets().equals("legacy")
+					? assetsDirectory.resolve("legacy").resolve(versionInfo.id())
+					: getLegacyResourcesDirectory().get().getAsFile().toPath();
+
+			for (AssetIndex.Object object : assetIndex.getObjects()) {
+				final Path asset = DownloadAssetsAction.getAssetsPath(object, assetIndex, assetsDirectory, legacyResources);
+
+				if (!Files.isRegularFile(asset) || Files.size(asset) != object.size()) {
+					return false;
+				}
+			}
+
+			return true;
+		} catch (Exception ignored) {
+			return false;
+		}
 	}
 
 	@TaskAction
-	public void downloadAssets() throws IOException {
-		final AssetIndex assetIndex = getAssetIndex();
+	public void run() {
+		final WorkQueue workQueue = getWorkerExecutor().noIsolation();
+		workQueue.submit(DownloadAssetsAction.class, parameters -> {
+			parameters.getMinecraftMetadata().set(getMinecraftMetadata());
+			parameters.getDownloadThreads().set(getDownloadThreads());
+			parameters.getResourcesBaseUrl().set(getResourcesBaseUrl());
+			parameters.getOffline().set(getOffline());
+			parameters.getRefresh().set(getRefresh());
+			parameters.getAssetsDirectory().set(getAssetsDirectory());
+			parameters.getLegacyResourcesDirectory().set(getLegacyResourcesDirectory());
+			parameters.getCompletionMarker().set(getCompletionMarker());
+		});
+	}
 
-		try (ProgressGroup progressGroup = new ProgressGroup("Download Assets", getProgressLoggerFactory());
-				DownloadExecutor executor = new DownloadExecutor(getDownloadThreads().get())) {
-			for (AssetIndex.Object object : assetIndex.getObjects()) {
-				final String sha1 = object.hash();
-				final String url = getResourcesBaseUrl().get() + sha1.substring(0, 2) + "/" + sha1;
+	public interface Parameters extends WorkParameters {
+		RegularFileProperty getMinecraftMetadata();
+		Property<Integer> getDownloadThreads();
+		Property<String> getResourcesBaseUrl();
+		Property<Boolean> getOffline();
+		Property<Boolean> getRefresh();
+		DirectoryProperty getAssetsDirectory();
+		DirectoryProperty getLegacyResourcesDirectory();
+		RegularFileProperty getCompletionMarker();
+	}
 
-				getDownloadFactory()
-						.download(url)
-						.sha1(sha1)
-						.progress(new GradleDownloadProgressListener(object.name(), progressGroup::createProgressLogger))
-						.downloadPathAsync(getAssetsPath(object, assetIndex), executor);
+	public abstract static class DownloadAssetsAction implements WorkAction<Parameters> {
+		@Override
+		public void execute() {
+			final Path completionMarker = getParameters().getCompletionMarker().get().getAsFile().toPath();
+
+			try {
+				final MinecraftVersionMeta versionInfo = readMetadata();
+				final AssetIndex assetIndex = getAssetIndex(versionInfo);
+				final Path assetsDirectory = getParameters().getAssetsDirectory().get().getAsFile().toPath();
+				final Path legacyResources = versionInfo.assets().equals("legacy")
+						? assetsDirectory.resolve("legacy").resolve(versionInfo.id())
+						: getParameters().getLegacyResourcesDirectory().get().getAsFile().toPath();
+
+				try (DownloadExecutor executor = new DownloadExecutor(getParameters().getDownloadThreads().get())) {
+					for (AssetIndex.Object object : assetIndex.getObjects()) {
+						final String sha1 = object.hash();
+						final String url = getParameters().getResourcesBaseUrl().get() + sha1.substring(0, 2) + "/" + sha1;
+						createDownload(url).sha1(sha1).downloadPathAsync(getAssetsPath(object, assetIndex, assetsDirectory, legacyResources), executor);
+					}
+				}
+
+				Files.createDirectories(completionMarker.getParent());
+				Files.writeString(completionMarker, versionInfo.id() + '\n' + Objects.toString(versionInfo.assetIndex().sha1(), ""), StandardCharsets.UTF_8);
+			} catch (Exception e) {
+				try {
+					Files.deleteIfExists(completionMarker);
+				} catch (IOException cleanupException) {
+					e.addSuppressed(cleanupException);
+				}
+
+				throw new RuntimeException("Failed to download Minecraft assets", e);
 			}
 		}
-	}
 
-	private AssetIndex getAssetIndex() throws IOException {
-		final MinecraftVersionMeta.AssetIndex assetIndex = LoomGradlePlugin.GSON.fromJson(getAssetsIndexJson().get(), MinecraftVersionMeta.AssetIndex.class);
-		final File indexFile = new File(getAssetsDirectory().get().getAsFile(), "indexes" + File.separator + assetIndex.fabricId(getMinecraftVersion().get()) + ".json");
-
-		final String json = getDownloadFactory().download(assetIndex.url())
-				.sha1(assetIndex.sha1())
-				.downloadString(indexFile.toPath());
-
-		return LoomGradlePlugin.GSON.fromJson(json, AssetIndex.class);
-	}
-
-	private Path getAssetsPath(AssetIndex.Object object, AssetIndex index) {
-		if (index.mapToResources() || index.virtual()) {
-			return new File(getLegacyResourcesDirectory().get().getAsFile(), object.path()).toPath();
+		private MinecraftVersionMeta readMetadata() throws IOException {
+			try (Reader reader = Files.newBufferedReader(getParameters().getMinecraftMetadata().get().getAsFile().toPath(), StandardCharsets.UTF_8)) {
+				return Objects.requireNonNull(LoomGradlePlugin.GSON.fromJson(reader, MinecraftVersionMeta.class), "Minecraft metadata is empty");
+			}
 		}
 
-		final String filename = "objects" + File.separator + object.hash().substring(0, 2) + File.separator + object.hash();
-		return new File(getAssetsDirectory().get().getAsFile(), filename).toPath();
+		private AssetIndex getAssetIndex(MinecraftVersionMeta versionInfo) throws IOException, URISyntaxException {
+			final MinecraftVersionMeta.AssetIndex assetIndex = versionInfo.assetIndex();
+			final Path indexFile = getParameters().getAssetsDirectory().get().getAsFile().toPath()
+					.resolve("indexes")
+					.resolve(assetIndex.fabricId(versionInfo.id()) + ".json");
+			final String json = createDownload(assetIndex.url())
+					.sha1(assetIndex.sha1())
+					.downloadString(indexFile);
+			return Objects.requireNonNull(LoomGradlePlugin.GSON.fromJson(json, AssetIndex.class), "Minecraft asset index is empty");
+		}
+
+		private DownloadBuilder createDownload(String url) throws URISyntaxException {
+			final DownloadBuilder download = Download.create(url);
+
+			if (getParameters().getOffline().get()) {
+				download.offline();
+			}
+
+			if (getParameters().getRefresh().get()) {
+				download.forceDownload();
+			}
+
+			return download;
+		}
+
+		static Path getAssetsPath(AssetIndex.Object object, AssetIndex index, Path assetsDirectory, Path legacyResources) {
+			if (index.mapToResources() || index.virtual()) {
+				return legacyResources.resolve(object.path());
+			}
+
+			return assetsDirectory.resolve("objects").resolve(object.hash().substring(0, 2)).resolve(object.hash());
+		}
 	}
 }

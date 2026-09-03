@@ -25,6 +25,7 @@
 package net.fabricmc.loom.configuration.mods;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
 
 import org.objectweb.asm.ClassVisitor;
@@ -39,11 +40,15 @@ import net.fabricmc.tinyremapper.TinyRemapper;
 
 public record AccessWidenerAnalyzeVisitorProvider(ClassTweaker accessWidener) implements TinyRemapper.AnalyzeVisitorProvider {
 	static AccessWidenerAnalyzeVisitorProvider createFromMods(String namespace, List<ModDependency> mods) throws IOException {
+		return create(namespace, mods.stream().map(ModDependency::getInputFile).toList());
+	}
+
+	static AccessWidenerAnalyzeVisitorProvider create(String namespace, List<Path> mods) throws IOException {
 		ClassTweaker accessWidener = ClassTweaker.newInstance();
 		accessWidener.visitHeader(namespace);
 
-		for (ModDependency mod : mods) {
-			final var accessWidenerData = AccessWidenerUtils.readAccessWidenerData(mod.getInputFile());
+		for (Path mod : mods) {
+			final var accessWidenerData = AccessWidenerUtils.readAccessWidenerData(mod);
 
 			if (accessWidenerData == null) {
 				continue;

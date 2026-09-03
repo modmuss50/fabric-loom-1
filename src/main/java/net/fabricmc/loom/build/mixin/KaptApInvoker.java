@@ -55,13 +55,7 @@ public class KaptApInvoker extends AnnotationProcessorInvoker<JavaCompile> {
 				getInvokerTasks(project),
 				"Kotlin");
 
-		try {
-			dummyRefmapDirectory = Files.createTempDirectory("temp_refmap").toFile();
-		} catch (IOException e) {
-			throw new RuntimeException(e);
-		}
-
-		dummyRefmapDirectory.deleteOnExit();
+		dummyRefmapDirectory = project.getLayout().getBuildDirectory().dir("loom-cache/kapt-refmaps").get().getAsFile();
 
 		// Needed for mixin AP to run
 		kaptExtension.setIncludeCompileClasspath(false);
@@ -82,6 +76,13 @@ public class KaptApInvoker extends AnnotationProcessorInvoker<JavaCompile> {
 			// target location for the refmap and then move it to the correct place for each sourceset
 			entry.getValue().configure(task -> {
 				SourceSet sourceSet = entry.getKey();
+				task.doFirst(ignored -> {
+					try {
+						Files.createDirectories(dummyRefmapDirectory.toPath());
+					} catch (IOException e) {
+						throw new RuntimeException("Failed to create the kapt refmap directory", e);
+					}
+				});
 				task.doLast(t -> {
 					try {
 						String refmapName = Objects.requireNonNull(MixinExtension.getMixinInformationContainer(sourceSet)).refmapNameProvider().get();

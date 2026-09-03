@@ -58,7 +58,7 @@ import org.jetbrains.annotations.ApiStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import net.fabricmc.loom.configuration.InstallerData;
+import net.fabricmc.loom.configuration.InstallerDataTaskConfiguration;
 import net.fabricmc.loom.task.AbstractLoomTask;
 import net.fabricmc.loom.task.RemapTaskConfiguration;
 import net.fabricmc.loom.util.Constants;
@@ -125,6 +125,7 @@ public abstract sealed class AbstractProductionRunTask extends AbstractLoomTask 
 
 	@Inject
 	public AbstractProductionRunTask() {
+		dependsOn(InstallerDataTaskConfiguration.SCAN_INSTALLER_DATA_TASK);
 		JavaToolchainSpec defaultToolchain = getProject().getExtensions().getByType(JavaPluginExtension.class).getToolchain();
 		getJavaLauncher().convention(getJavaToolchainService().launcherFor(defaultToolchain));
 		getRunDir().convention(getProject().getLayout().getProjectDirectory().dir("run"));
@@ -188,15 +189,7 @@ public abstract sealed class AbstractProductionRunTask extends AbstractLoomTask 
 
 	@Internal
 	protected Provider<String> getProjectLoaderVersion() {
-		return getProject().provider(() -> {
-			InstallerData installerData = getExtension().getInstallerData();
-
-			if (installerData == null) {
-				return null;
-			}
-
-			return installerData.version();
-		});
+		return InstallerDataTaskConfiguration.getInstallerVersion(getProject());
 	}
 
 	protected Provider<Configuration> detachedConfigurationProvider(String mavenNotation, Provider<String> versionProvider) {

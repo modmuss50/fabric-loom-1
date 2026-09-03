@@ -40,7 +40,7 @@ import org.gradle.util.GradleVersion;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.LoomGradlePlugin;
-import net.fabricmc.loom.configuration.InstallerData;
+import net.fabricmc.loom.configuration.InstallerDataTaskConfiguration;
 import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.LoomVersions;
 import net.fabricmc.tinyremapper.TinyRemapper;
@@ -67,7 +67,7 @@ public abstract class JarManifestService implements BuildService<JarManifestServ
 				params.getMCEVersion().set(LoomVersions.MIXIN_COMPILE_EXTENSIONS.version());
 				params.getMinecraftVersion().set(project.provider(() -> extension.getMinecraftProvider().minecraftVersion()));
 				params.getTinyRemapperVersion().set(tinyRemapperVersion.orElse("unknown"));
-				params.getFabricLoaderVersion().set(project.provider(() -> Optional.ofNullable(extension.getInstallerData()).map(InstallerData::version).orElse("unknown")));
+				params.getFabricLoaderVersion().set(InstallerDataTaskConfiguration.getInstallerVersionOrUnknown(project));
 				params.getMixinVersion().set(getMixinVersion(project));
 			});
 		});

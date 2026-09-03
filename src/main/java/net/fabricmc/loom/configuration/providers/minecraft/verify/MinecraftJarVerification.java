@@ -33,6 +33,7 @@ import java.util.function.Function;
 import javax.inject.Inject;
 
 import org.gradle.api.Project;
+import org.jetbrains.annotations.ApiStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -60,8 +61,33 @@ public abstract class MinecraftJarVerification {
 	}
 
 	private void verifyJarSignature(Path path, KnownJarType type) throws IOException, SignatureVerificationFailure {
-		CertificateChain chain = CertificateChain.getRoot("mojangcs");
 		CertificateRevocationList revocationList = CertificateRevocationList.create(getProject(), CertificateRevocationList.CSC3_2010);
+
+		try {
+			verifyJar(path, minecraftVersion, type, revocationList);
+		} catch (SignatureVerificationFailure e) {
+			try {
+				Files.delete(path);
+			} catch (IOException ioe) {
+				LOGGER.error("Failed to delete invalid Minecraft jar: {}", path, ioe);
+			}
+
+			throw e;
+		}
+	}
+
+	@ApiStatus.Internal
+	public static void verifyClientJar(Path path, String minecraftVersion, CertificateRevocationList revocationList) throws IOException, SignatureVerificationFailure {
+		verifyJar(path, minecraftVersion, KnownJarType.CLIENT, revocationList);
+	}
+
+	@ApiStatus.Internal
+	public static void verifyServerJar(Path path, String minecraftVersion, CertificateRevocationList revocationList) throws IOException, SignatureVerificationFailure {
+		verifyJar(path, minecraftVersion, KnownJarType.SERVER, revocationList);
+	}
+
+	private static void verifyJar(Path path, String minecraftVersion, KnownJarType type, CertificateRevocationList revocationList) throws IOException, SignatureVerificationFailure {
+		final CertificateChain chain = CertificateChain.getRoot("mojangcs");
 
 		try {
 			revocationList.verify(chain);
@@ -73,18 +99,11 @@ public abstract class MinecraftJarVerification {
 			}
 
 			LOGGER.error("Verification of Minecraft {} signature failed: {}", path.getFileName(), e.getMessage());
-
-			try {
-				Files.delete(path);
-			} catch (IOException ioe) {
-				LOGGER.error("Failed to delete invalid Minecraft jar: {}", path, ioe);
-			}
-
 			throw e;
 		}
 	}
 
-	private boolean isValidKnownVersion(Path path, String version, KnownJarType type) throws IOException, SignatureVerificationFailure {
+	private static boolean isValidKnownVersion(Path path, String version, KnownJarType type) throws IOException, SignatureVerificationFailure {
 		Map<String, String> knownVersions = type.getKnownVersions();
 		String expectedHash = knownVersions.get(version);
 

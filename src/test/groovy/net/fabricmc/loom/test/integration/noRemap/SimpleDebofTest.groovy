@@ -133,4 +133,47 @@ class SimpleDebofTest extends Specification implements GradleProjectTestTrait {
 		then:
 		result.task(":genSources").outcome == SUCCESS
 	}
+
+	def "idea sync split build obtains the default main class lazily"() {
+		setup:
+		def gradle = gradleProject(project: "minimalBaseNoRemap", version: PRE_RELEASE_GRADLE)
+		gradle.buildGradle << """
+				loom {
+					splitEnvironmentSourceSets()
+				}
+
+				fabricApi {
+					configureDataGeneration {
+						client = true
+						createSourceSet = true
+						modId = "example-datagen"
+					}
+
+					configureTests {
+						createSourceSet = true
+						modId = "example-tests"
+					}
+				}
+
+				dependencies {
+					minecraft 'com.mojang:minecraft:25w45a_unobfuscated'
+					implementation "${LoomTestVersions.FABRIC_LOADER.mavenNotation()}"
+				}
+		"""
+
+		when:
+		def result = gradle.run(task: "ideaSyncTask")
+		def runConfigs = new File(gradle.projectDir, ".idea/runConfigurations").listFiles()*.name.toSet()
+
+		then:
+		result.task(":scanInstallerData").outcome == SUCCESS
+		result.task(":ideaSyncTask").outcome == SUCCESS
+		runConfigs == [
+			"Minecraft_Client.xml",
+			"Minecraft_Server.xml",
+			"Data_Generation.xml",
+			"Gametest_Minecraft_Game_Test.xml",
+			"Gametest_Minecraft_Client_Game_Test.xml",
+		] as Set
+	}
 }

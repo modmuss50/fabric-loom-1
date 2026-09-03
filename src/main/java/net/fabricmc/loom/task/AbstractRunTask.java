@@ -48,7 +48,6 @@ import org.gradle.api.provider.ListProperty;
 import org.gradle.api.provider.MapProperty;
 import org.gradle.api.provider.Property;
 import org.gradle.api.provider.Provider;
-import org.gradle.api.specs.Spec;
 import org.gradle.api.tasks.Classpath;
 import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.InputFiles;
@@ -125,10 +124,11 @@ public abstract class AbstractRunTask extends JavaExec {
 		final Provider<RunConfiguration> config = getProject().provider(() -> configProvider.apply(getProject()));
 
 		getInternalClasspath().from(config.map(runConfig -> SourceSetHelper.getSourceSetByName(runConfig.getSourceSet().get(), getProject()).getRuntimeClasspath()
-				.filter(new LibraryFilter(
-						RuntimeLibraries.getExcludedLibraryPaths(getProject(), config.get()),
-						RunConfigUtils.getDisplayName(config.get(), getProject()))
-				)));
+				.filter(RuntimeLibraries.createLibraryFilter(
+						getProject(),
+						config.get(),
+						RunConfigUtils.getDisplayName(config.get(), getProject())
+				))));
 
 		getArgumentProviders().add(new CommandLineArgumentProvider() {
 			@Override
@@ -357,17 +357,5 @@ public abstract class AbstractRunTask extends JavaExec {
 	@Override
 	public FileCollection getClasspath() {
 		return this.getInternalClasspath();
-	}
-
-	public record LibraryFilter(List<String> excludedLibraryPaths, String configName) implements Spec<File> {
-		@Override
-		public boolean isSatisfiedBy(File element) {
-			if (excludedLibraryPaths.contains(element.getAbsolutePath())) {
-				LOGGER.debug("Excluding library {} from {} run config", element.getName(), configName);
-				return false;
-			}
-
-			return true;
-		}
 	}
 }

@@ -25,51 +25,45 @@
 package net.fabricmc.loom.configuration.providers.minecraft;
 
 import java.io.IOException;
+import java.io.Reader;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.function.Function;
+import java.util.Objects;
 
 import org.gradle.api.Project;
-import org.gradle.api.provider.Property;
-import org.jspecify.annotations.Nullable;
+import org.gradle.api.artifacts.Dependency;
+import org.gradle.api.artifacts.DependencySet;
 
-import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.LoomGradlePlugin;
 import net.fabricmc.loom.configuration.ConfigContext;
-import net.fabricmc.loom.configuration.DependencyInfo;
-import net.fabricmc.loom.configuration.providers.minecraft.ManifestLocations.ManifestLocation;
 import net.fabricmc.loom.util.Constants;
-import net.fabricmc.loom.util.download.DownloadBuilder;
 
 public final class MinecraftMetadataProvider {
 	private final Options options;
-	private final Function<String, DownloadBuilder> download;
 
-	private ManifestEntryLocation versionEntry;
 	private MinecraftVersionMeta versionMeta;
 
-	private MinecraftMetadataProvider(Options options, Function<String, DownloadBuilder> download) {
+	private MinecraftMetadataProvider(Options options) {
 		this.options = options;
-		this.download = download;
 	}
 
 	public static MinecraftMetadataProvider create(ConfigContext configContext) {
 		final String minecraftVersion = resolveMinecraftVersion(configContext.project());
 
-		return new MinecraftMetadataProvider(
-				MinecraftMetadataProvider.Options.create(
-						minecraftVersion,
-						configContext.project()
-				),
-				configContext.extension()::download
-		);
+		return new MinecraftMetadataProvider(MinecraftMetadataProvider.Options.create(minecraftVersion, configContext.project()));
 	}
 
 	private static String resolveMinecraftVersion(Project project) {
-		final DependencyInfo dependency = DependencyInfo.create(project, Constants.Configurations.MINECRAFT);
-		return dependency.getDependency().getVersion();
+		final DependencySet dependencies = project.getConfigurations().getByName(Constants.Configurations.MINECRAFT).getDependencies();
+
+		if (dependencies.size() != 1) {
+			throw new IllegalArgumentException("Configuration '%s' must have exactly one dependency".formatted(Constants.Configurations.MINECRAFT));
+		}
+
+		final Dependency dependency = dependencies.iterator().next();
+		return Objects.requireNonNull(dependency.getVersion(), "Task-backed Minecraft requires a dependency with a declared version");
 	}
 
 	public String getMinecraftVersion() {
@@ -77,16 +71,12 @@ public final class MinecraftMetadataProvider {
 	}
 
 	public MinecraftVersionMeta getVersionMeta() {
-		try {
-			if (versionEntry == null) {
-				versionEntry = getVersionEntry();
-			}
-
-			if (versionMeta == null) {
+		if (versionMeta == null) {
+			try {
 				versionMeta = readVersionMeta();
+			} catch (IOException e) {
+				throw new UncheckedIOException(e.getMessage(), e);
 			}
-		} catch (IOException e) {
-			throw new UncheckedIOException(e.getMessage(), e);
 		}
 
 		return versionMeta;
@@ -97,114 +87,28 @@ public final class MinecraftMetadataProvider {
 				&& !getVersionMeta().downloads().containsKey("client_mappings");
 	}
 
-	private ManifestEntryLocation getVersionEntry() throws IOException {
-		// Custom URL always takes priority
-		if (options.customManifestUrl() != null) {
-			VersionsManifest.Version customVersion = new VersionsManifest.Version(
-					options.minecraftVersion(),
-					options.customManifestUrl()
-			);
-			return new ManifestEntryLocation(null, customVersion);
-		}
-
-		final List<ManifestEntrySupplier> suppliers = new ArrayList<>();
-
-		// First try finding the version with caching
-		for (ManifestLocation location : options.versionsManifests()) {
-			suppliers.add(() -> getManifestEntry(location, false));
-		}
-
-		// Then force download the manifest to find the version
-		for (ManifestLocation location : options.versionsManifests()) {
-			suppliers.add(() -> getManifestEntry(location, true));
-		}
-
-		for (ManifestEntrySupplier supplier : suppliers) {
-			final ManifestEntryLocation version = supplier.get();
-
-			if (version != null) {
-				return version;
-			}
-		}
-
-		throw new RuntimeException("Failed to find minecraft version: " + options.minecraftVersion());
-	}
-
-	@Nullable
-	private ManifestEntryLocation getManifestEntry(ManifestLocation location, boolean forceDownload) throws IOException {
-		DownloadBuilder builder = download.apply(location.url());
-
-		if (forceDownload) {
-			builder = builder.forceDownload();
-		} else {
-			builder = builder.defaultCache();
-		}
-
-		final Path cacheFile = location.cacheFile(options.userCache());
-		final String versionManifest = builder.downloadString(cacheFile);
-		final VersionsManifest manifest = LoomGradlePlugin.GSON.fromJson(versionManifest, VersionsManifest.class);
-		final VersionsManifest.Version version = manifest.getVersion(options.minecraftVersion());
-
-		if (version != null) {
-			return new ManifestEntryLocation(location, version);
-		}
-
-		return null;
-	}
-
 	private MinecraftVersionMeta readVersionMeta() throws IOException {
-		final DownloadBuilder builder = download.apply(versionEntry.entry.url());
+		final Path metadata = options.workingDir().resolve("minecraft-metadata.json");
 
-		if (versionEntry.entry.sha1() != null) {
-			builder.sha1(versionEntry.entry.sha1());
-		} else {
-			builder.defaultCache();
+		if (Files.notExists(metadata)) {
+			throw new IOException("Minecraft metadata has not been produced yet: " + metadata);
 		}
 
-		final String fileName = getVersionMetaFileName();
-		final Path cacheFile = options.workingDir().resolve(fileName);
-		final String json = builder.downloadString(cacheFile);
-		return LoomGradlePlugin.GSON.fromJson(json, MinecraftVersionMeta.class);
-	}
+		try (Reader reader = Files.newBufferedReader(metadata, StandardCharsets.UTF_8)) {
+			final MinecraftVersionMeta value = LoomGradlePlugin.GSON.fromJson(reader, MinecraftVersionMeta.class);
 
-	private String getVersionMetaFileName() {
-		// custom version metadata
-		if (versionEntry.manifest == null) {
-			return "minecraft_info_" + Integer.toHexString(versionEntry.entry.url().hashCode()) + ".json";
+			if (value == null) {
+				throw new IOException("Minecraft metadata is empty: " + metadata);
+			}
+
+			return value;
 		}
-
-		// metadata url taken from versions manifest
-		return versionEntry.manifest.name() + "_minecraft_info.json";
 	}
 
-	public record Options(String minecraftVersion,
-					ManifestLocations versionsManifests,
-					@Nullable String customManifestUrl,
-					Path userCache,
-					Path workingDir) {
+	public record Options(String minecraftVersion, Path workingDir) {
 		public static Options create(String minecraftVersion, Project project) {
-			final LoomGradleExtension extension = LoomGradleExtension.get(project);
-			final Path userCache = extension.getFiles().getUserCache().toPath();
 			final Path workingDir = MinecraftProvider.minecraftWorkingDirectory(project, minecraftVersion).toPath();
-
-			final ManifestLocations manifestLocations = extension.getVersionsManifests();
-			final Property<String> customMetaUrl = extension.getCustomMinecraftMetadata();
-
-			return new Options(
-					minecraftVersion,
-					manifestLocations,
-					customMetaUrl.getOrNull(),
-					userCache,
-					workingDir
-			);
+			return new Options(minecraftVersion, workingDir);
 		}
-	}
-
-	@FunctionalInterface
-	private interface ManifestEntrySupplier {
-		ManifestEntryLocation get() throws IOException;
-	}
-
-	private record ManifestEntryLocation(ManifestLocation manifest, VersionsManifest.Version entry) {
 	}
 }

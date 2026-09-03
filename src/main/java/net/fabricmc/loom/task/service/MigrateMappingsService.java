@@ -25,8 +25,6 @@
 package net.fabricmc.loom.task.service;
 
 import java.io.File;
-import java.io.IOException;
-import java.io.UncheckedIOException;
 
 import org.gradle.api.IllegalDependencyNotation;
 import org.gradle.api.Project;
@@ -75,11 +73,11 @@ public final class MigrateMappingsService extends Service<MigrateMappingsService
 		ConfigurableFileCollection classpath = project.getObjects().fileCollection();
 		classpath.from(project.getConfigurations().named(JavaPlugin.COMPILE_CLASSPATH_CONFIGURATION_NAME));
 		// Question: why are both of these needed?
-		classpath.from(extension.getMinecraftJars(MappingsNamespace.INTERMEDIARY));
-		classpath.from(extension.getMinecraftJars(MappingsNamespace.NAMED));
+		classpath.from(extension.getMinecraftJarsCollection(MappingsNamespace.INTERMEDIARY));
+		classpath.from(extension.getMinecraftJarsCollection(MappingsNamespace.NAMED));
 
 		return TYPE.create(project, (o) -> {
-			Provider<File> targetMappingsFile = getTargetMappingsFile(project, targetMappings.get());
+			Provider<File> targetMappingsFile = targetMappings.flatMap(mappings -> getTargetMappingsFile(project, mappings));
 			o.getSourceMappings().set(MappingsService.createOptionsWithProjectMappings(project, from, to));
 			o.getTargetMappings().set(TinyMappingsService.createOptions(project, targetMappingsFile, "mappings/mappings.tiny"));
 			o.getClasspath().from(classpath);
@@ -112,9 +110,8 @@ public final class MigrateMappingsService extends Service<MigrateMappingsService
 					throw new UnsupportedOperationException("Migrating Mojang mappings is currently only supported for the specified minecraft version");
 				}
 
-				LayeredMappingsFactory dep = new LayeredMappingsFactory(LayeredMappingSpecBuilderImpl.buildOfficialMojangMappings());
-				File file = dep.resolve(project).toFile();
-				return project.provider(() -> file);
+				LayeredMappingsFactory factory = new LayeredMappingsFactory(LayeredMappingSpecBuilderImpl.buildOfficialMojangMappings());
+				return factory.createFileProvider(project);
 			} else {
 				Dependency dependency = project.getDependencies().create(mappings);
 				return project.provider(() -> project.getConfigurations().detachedConfiguration(dependency).getSingleFile());
@@ -123,8 +120,6 @@ public final class MigrateMappingsService extends Service<MigrateMappingsService
 			LOGGER.info("Could not locate mappings, presuming V2 Yarn");
 			String mavenNotation = "net.fabricmc:yarn:%s:v2".formatted(mappings);
 			return project.provider(() -> project.getConfigurations().detachedConfiguration(project.getDependencies().create(mavenNotation)).getSingleFile());
-		} catch (IOException e) {
-			throw new UncheckedIOException("Failed to resolve mappings", e);
 		}
 	}
 }

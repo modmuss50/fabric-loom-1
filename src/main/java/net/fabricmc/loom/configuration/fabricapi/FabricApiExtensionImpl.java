@@ -27,8 +27,8 @@ package net.fabricmc.loom.configuration.fabricapi;
 import javax.inject.Inject;
 
 import org.gradle.api.Action;
-import org.gradle.api.artifacts.Dependency;
 import org.gradle.api.model.ObjectFactory;
+import org.gradle.api.provider.Provider;
 
 import net.fabricmc.loom.api.fabricapi.DataGenerationSettings;
 import net.fabricmc.loom.api.fabricapi.FabricApiExtension;
@@ -49,12 +49,12 @@ public abstract class FabricApiExtensionImpl implements FabricApiExtension {
 	}
 
 	@Override
-	public Dependency module(String moduleName, String fabricApiVersion) {
+	public Provider<String> module(String moduleName, String fabricApiVersion) {
 		return versions.module(moduleName, fabricApiVersion);
 	}
 
 	@Override
-	public String moduleVersion(String moduleName, String fabricApiVersion) {
+	public Provider<String> moduleVersion(String moduleName, String fabricApiVersion) {
 		return versions.moduleVersion(moduleName, fabricApiVersion);
 	}
 

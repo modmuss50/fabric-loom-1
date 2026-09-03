@@ -25,8 +25,14 @@
 package net.fabricmc.loom.task.service;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -58,7 +64,9 @@ import net.fabricmc.loom.util.service.ServiceFactory;
 import net.fabricmc.loom.util.service.ServiceType;
 
 public class ClasspathGroupService extends Service<ClasspathGroupService.Options> {
+	public static final String GENERATED_GROUPS_CONFIGURATION = "loomGeneratedClasspathGroups";
 	public static ServiceType<Options, ClasspathGroupService> TYPE = new ServiceType<Options, ClasspathGroupService>(Options.class, ClasspathGroupService.class);
+	private static final String GENERATED_GROUPS_HEADER = "loom-classpath-groups-v1";
 
 	public interface Options extends Service.Options {
 		@Input
@@ -69,20 +77,32 @@ public class ClasspathGroupService extends Service<ClasspathGroupService.Options
 		@Optional
 		@PathSensitive(PathSensitivity.NONE)
 		ConfigurableFileCollection getExternalClasspathGroups();
+
+		@InputFiles
+		@Optional
+		@PathSensitive(PathSensitivity.NONE)
+		ConfigurableFileCollection getGeneratedClasspathGroups();
 	}
 
 	public static Provider<Options> create(Project project) {
 		return TYPE.create(project, options -> {
 			LoomGradleExtension extension = LoomGradleExtension.get(project);
 			NamedDomainObjectContainer<ModSettings> modSettings = extension.getMods();
+			Configuration generatedGroups = project.getConfigurations().findByName(GENERATED_GROUPS_CONFIGURATION);
 
-			if (modSettings.isEmpty()) {
+			if (modSettings.isEmpty() && generatedGroups == null) {
 				return;
 			}
 
-			options.getClasspathGroups().set(ClasspathGroup.fromModSettings(modSettings));
+			if (!modSettings.isEmpty()) {
+				options.getClasspathGroups().set(ClasspathGroup.fromModSettings(modSettings));
+			}
 
-			if (!hasExternalClasspathGroups(modSettings)) {
+			if (generatedGroups != null) {
+				options.getGeneratedClasspathGroups().from(generatedGroups);
+			}
+
+			if (modSettings.isEmpty() || !hasExternalClasspathGroups(modSettings)) {
 				return;
 			}
 
@@ -122,6 +142,7 @@ public class ClasspathGroupService extends Service<ClasspathGroupService.Options
 	}
 
 	private final Supplier<Map<String, ExternalClasspathGroupDTO>> externalClasspathGroups = Lazy.of(() -> ExternalClasspathGroupDTO.resolveExternal(getOptions().getExternalClasspathGroups().getFiles()));
+	private final Supplier<List<ClasspathGroup>> generatedClasspathGroups = Lazy.of(this::readGeneratedClasspathGroups);
 
 	public ClasspathGroupService(Options options, ServiceFactory serviceFactory) {
 		super(options, serviceFactory);
@@ -149,7 +170,15 @@ public class ClasspathGroupService extends Service<ClasspathGroupService.Options
 	 * See: https://github.com/FabricMC/fabric-loader/pull/585.
 	 */
 	public String getClasspathGroupsPropertyValue() {
-		return getOptions().getClasspathGroups().get()
+		final List<ClasspathGroup> groups = new ArrayList<>();
+
+		if (getOptions().getClasspathGroups().isPresent()) {
+			groups.addAll(getOptions().getClasspathGroups().get());
+		}
+
+		groups.addAll(generatedClasspathGroups.get());
+
+		return groups
 				.stream()
 				.map(group ->
 					getClasspath(group).stream()
@@ -160,6 +189,58 @@ public class ClasspathGroupService extends Service<ClasspathGroupService.Options
 	}
 
 	public boolean hasGroups() {
-		return getOptions().getClasspathGroups().isPresent() && !getOptions().getClasspathGroups().get().isEmpty();
+		return getOptions().getClasspathGroups().isPresent() && !getOptions().getClasspathGroups().get().isEmpty()
+				|| !generatedClasspathGroups.get().isEmpty();
+	}
+
+	private List<ClasspathGroup> readGeneratedClasspathGroups() {
+		if (getOptions().getGeneratedClasspathGroups().isEmpty()) {
+			return List.of();
+		}
+
+		final List<ClasspathGroup> groups = new ArrayList<>();
+		final List<File> descriptors = getOptions().getGeneratedClasspathGroups().getFiles().stream()
+				.sorted(Comparator.comparing(File::getAbsolutePath))
+				.toList();
+
+		for (File descriptor : descriptors) {
+			try {
+				final List<String> lines = Files.readAllLines(descriptor.toPath(), StandardCharsets.UTF_8);
+
+				if (lines.isEmpty() || !lines.getFirst().equals(GENERATED_GROUPS_HEADER)) {
+					throw new IOException("Unsupported generated classpath-group descriptor: " + descriptor);
+				}
+
+				final Path root = descriptor.toPath().toAbsolutePath().normalize().getParent();
+
+				for (String line : lines.subList(1, lines.size())) {
+					if (line.isBlank()) {
+						continue;
+					}
+
+					final List<String> paths = java.util.Arrays.stream(line.split("\\t", -1))
+							.map(Path::of)
+							.map(root::resolve)
+							.map(Path::normalize)
+							.peek(path -> {
+								if (!path.startsWith(root)) {
+									throw new IllegalArgumentException("Classpath-group path escapes its descriptor directory: " + path);
+								}
+							})
+							.map(Path::toString)
+							.toList();
+
+					if (paths.size() < 2) {
+						throw new IOException("Generated classpath group must contain at least two paths: " + descriptor);
+					}
+
+					groups.add(new ClasspathGroup(paths, List.of()));
+				}
+			} catch (IOException e) {
+				throw new UncheckedIOException("Failed to read generated classpath groups from " + descriptor, e);
+			}
+		}
+
+		return List.copyOf(groups);
 	}
 }

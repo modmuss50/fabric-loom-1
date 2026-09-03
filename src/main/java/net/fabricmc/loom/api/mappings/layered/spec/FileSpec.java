@@ -42,6 +42,7 @@ import net.fabricmc.loom.configuration.providers.mappings.utils.DependencyFileSp
 import net.fabricmc.loom.configuration.providers.mappings.utils.LocalFileSpec;
 import net.fabricmc.loom.configuration.providers.mappings.utils.MavenFileSpec;
 import net.fabricmc.loom.configuration.providers.mappings.utils.MinimalExternalModuleDependencyFileSpec;
+import net.fabricmc.loom.configuration.providers.mappings.utils.ProviderFileSpec;
 import net.fabricmc.loom.configuration.providers.mappings.utils.URLFileSpec;
 
 /**
@@ -55,7 +56,7 @@ public interface FileSpec {
 	 * <p>The parameter will be evaluated like this:
 	 * <ul>
 	 * <li>{@link File}, {@link Path} and {@link FileSystemLocation} will be resolved as local files</li>
-	 * <li>{@link Provider} (including {@link org.gradle.api.provider.Property}) will recursively be resolved as its current value</li>
+	 * <li>{@link Provider} (including {@link org.gradle.api.provider.Property}) will be resolved lazily as a task input and must provide a file location</li>
 	 * <li>{@link CharSequence} (including {@link String} and {@link groovy.lang.GString}) will be resolved as Maven dependencies</li>
 	 * <li>{@link Dependency} will be resolved as any dependency</li>
 	 * <li>{@link MinimalExternalModuleDependency} will be resolved as any dependency</li>
@@ -83,7 +84,7 @@ public interface FileSpec {
 		} else if (o instanceof Dependency d) {
 			return createFromDependency(d);
 		} else if (o instanceof Provider<?> p) {
-			return create(p.get());
+			return createFromProvider(p);
 		} else if (o instanceof File f) {
 			return createFromFile(f);
 		} else if (o instanceof Path p) {
@@ -107,6 +108,10 @@ public interface FileSpec {
 		return new DependencyFileSpec(dependency);
 	}
 
+	static FileSpec createFromProvider(Provider<?> provider) {
+		return new ProviderFileSpec(provider);
+	}
+
 	static FileSpec createFromFile(File file) {
 		return new LocalFileSpec(file);
 	}
@@ -123,9 +128,8 @@ public interface FileSpec {
 		return new URLFileSpec(url.toString());
 	}
 
-	// Note resolved instantly, this is not lazy
 	static FileSpec createFromFile(RegularFileProperty regularFileProperty) {
-		return createFromFile(regularFileProperty.get());
+		return createFromProvider(regularFileProperty);
 	}
 
 	static FileSpec createFromMinimalExternalModuleDependency(MinimalExternalModuleDependency externalModuleDependency) {

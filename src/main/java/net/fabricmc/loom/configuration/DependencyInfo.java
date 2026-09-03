@@ -37,6 +37,9 @@ import org.gradle.api.artifacts.ResolvedDependency;
 import org.gradle.api.artifacts.component.ComponentIdentifier;
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier;
 
+import net.fabricmc.loom.configuration.providers.mappings.LayeredMappingsFactory;
+import net.fabricmc.loom.util.Checksum;
+
 public class DependencyInfo {
 	final Project project;
 	final Dependency dependency;
@@ -49,7 +52,42 @@ public class DependencyInfo {
 	}
 
 	public static DependencyInfo create(Project project, Configuration configuration) {
-		DependencySet dependencies = configuration.getDependencies();
+		return create(project, getSingleDependency(configuration), configuration);
+	}
+
+	public static DependencyInfo createForMappings(Project project, String configuration) {
+		return createForMappings(project, project.getConfigurations().getByName(configuration));
+	}
+
+	public static DependencyInfo createForMappings(Project project, Configuration configuration) {
+		final Dependency dependency = getSingleDependency(configuration);
+
+		if (dependency instanceof FileCollectionDependency fileDependency) {
+			final String layeredIdentity = getLayeredIdentity(dependency);
+			final String identity = layeredIdentity != null ? layeredIdentity : getMappingFileIdentity(project, configuration);
+			final String notation = layeredIdentity != null ? "loom:layered:" + identity : "loom:file-mappings:" + identity;
+			return new TaskBackedFileDependencyInfo(project, fileDependency, configuration, identity, notation);
+		}
+
+		return new DependencyInfo(project, dependency, configuration);
+	}
+
+	public static DependencyInfo create(Project project, Dependency dependency, Configuration sourceConfiguration) {
+		if (dependency instanceof FileCollectionDependency fileCollectionDependency) {
+			final String layeredIdentity = getLayeredIdentity(dependency);
+
+			if (layeredIdentity != null) {
+				return new TaskBackedFileDependencyInfo(project, fileCollectionDependency, sourceConfiguration, layeredIdentity, "loom:layered:" + layeredIdentity);
+			}
+
+			return new FileDependencyInfo(project, fileCollectionDependency, sourceConfiguration);
+		} else {
+			return new DependencyInfo(project, dependency, sourceConfiguration);
+		}
+	}
+
+	private static Dependency getSingleDependency(Configuration configuration) {
+		final DependencySet dependencies = configuration.getDependencies();
 
 		if (dependencies.isEmpty()) {
 			throw new IllegalArgumentException(String.format("Configuration '%s' has no dependencies", configuration.getName()));
@@ -59,15 +97,19 @@ public class DependencyInfo {
 			throw new IllegalArgumentException(String.format("Configuration '%s' must only have 1 dependency", configuration.getName()));
 		}
 
-		return create(project, dependencies.iterator().next(), configuration);
+		return dependencies.iterator().next();
 	}
 
-	public static DependencyInfo create(Project project, Dependency dependency, Configuration sourceConfiguration) {
-		if (dependency instanceof FileCollectionDependency fileCollectionDependency) {
-			return new FileDependencyInfo(project, fileCollectionDependency, sourceConfiguration);
-		} else {
-			return new DependencyInfo(project, dependency, sourceConfiguration);
-		}
+	private static String getLayeredIdentity(Dependency dependency) {
+		final String reason = dependency.getReason();
+		return reason != null && reason.startsWith(LayeredMappingsFactory.DEPENDENCY_REASON_PREFIX)
+				? reason.substring(LayeredMappingsFactory.DEPENDENCY_REASON_PREFIX.length())
+				: null;
+	}
+
+	private static String getMappingFileIdentity(Project project, Configuration configuration) {
+		final String declaration = project.getProjectDir().getAbsolutePath() + '\0' + project.getPath() + '\0' + configuration.getName();
+		return Checksum.of(declaration).sha256().hex();
 	}
 
 	DependencyInfo(Project project, Dependency dependency, Configuration sourceConfiguration) {
@@ -147,5 +189,38 @@ public class DependencyInfo {
 
 	public String getResolvedDepString() {
 		return dependency.getGroup() + ":" + dependency.getName() + ":" + getResolvedVersion();
+	}
+
+	private static final class TaskBackedFileDependencyInfo extends DependencyInfo {
+		private final FileCollectionDependency fileDependency;
+		private final String identity;
+		private final String notation;
+
+		private TaskBackedFileDependencyInfo(Project project, FileCollectionDependency dependency, Configuration sourceConfiguration, String identity, String notation) {
+			super(project, dependency, sourceConfiguration);
+			this.fileDependency = dependency;
+			this.identity = identity;
+			this.notation = notation;
+		}
+
+		@Override
+		public String getResolvedVersion() {
+			return identity;
+		}
+
+		@Override
+		public String getDepString() {
+			return notation;
+		}
+
+		@Override
+		public String getResolvedDepString() {
+			return getDepString();
+		}
+
+		@Override
+		public Set<File> resolve() {
+			return fileDependency.getFiles().getFiles();
+		}
 	}
 }

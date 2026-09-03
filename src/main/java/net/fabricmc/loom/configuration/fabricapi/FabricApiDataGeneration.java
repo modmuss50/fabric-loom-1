@@ -100,8 +100,8 @@ public abstract class FabricApiDataGeneration extends FabricApiAbstractSourceSet
 				run.getSystemProperties().put("fabric-api.datagen.output-dir", outputDirectory.getAbsolutePath());
 				run.getRunDirectory().set(getProject().file("run/datagen"));
 
-				if (settings.getModId().isPresent()) {
-					run.getSystemProperties().put("fabric-api.datagen.modid", settings.getModId().get());
+				if (settings.getCreateSourceSet().get() || settings.getModId().isPresent()) {
+					run.getSystemProperties().put("fabric-api.datagen.modid", settings.getModId());
 				}
 
 				if (settings.getStrictValidation().get()) {

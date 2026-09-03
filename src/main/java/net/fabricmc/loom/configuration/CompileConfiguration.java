@@ -29,23 +29,17 @@ import static net.fabricmc.loom.util.Constants.Configurations;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.function.Consumer;
 
 import javax.inject.Inject;
 
 import org.gradle.api.Action;
-import org.gradle.api.GradleException;
 import org.gradle.api.Project;
 import org.gradle.api.Task;
-import org.gradle.api.logging.Logger;
-import org.gradle.api.logging.Logging;
 import org.gradle.api.plugins.JavaPlugin;
 import org.gradle.api.provider.Provider;
 import org.gradle.api.tasks.AbstractCopyTask;
@@ -58,16 +52,11 @@ import org.gradle.api.tasks.testing.Test;
 import org.jspecify.annotations.Nullable;
 
 import net.fabricmc.loom.LoomGradleExtension;
-import net.fabricmc.loom.api.InterfaceInjectionExtensionAPI;
 import net.fabricmc.loom.build.mixin.GroovyApInvoker;
 import net.fabricmc.loom.build.mixin.JavaApInvoker;
 import net.fabricmc.loom.build.mixin.KaptApInvoker;
 import net.fabricmc.loom.build.mixin.ScalaApInvoker;
-import net.fabricmc.loom.configuration.accesswidener.AccessWidenerJarProcessor;
-import net.fabricmc.loom.configuration.ifaceinject.InterfaceInjectionProcessor;
-import net.fabricmc.loom.configuration.processors.JsrAnnotationRemapperProcessor;
 import net.fabricmc.loom.configuration.processors.MinecraftJarProcessorManager;
-import net.fabricmc.loom.configuration.processors.ModJavadocProcessor;
 import net.fabricmc.loom.configuration.processors.speccontext.DebofConfiguration;
 import net.fabricmc.loom.configuration.providers.mappings.LayeredMappingsFactory;
 import net.fabricmc.loom.configuration.providers.mappings.MappingConfiguration;
@@ -77,6 +66,7 @@ import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJar;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftMetadataProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftSourceSets;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftTaskGraph;
 import net.fabricmc.loom.configuration.providers.minecraft.TaskBasedMinecraftConfiguration;
 import net.fabricmc.loom.configuration.providers.minecraft.mapped.AbstractMappedMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.mapped.IntermediaryMinecraftProvider;
@@ -84,10 +74,8 @@ import net.fabricmc.loom.configuration.providers.minecraft.mapped.NamedMinecraft
 import net.fabricmc.loom.extension.MixinExtension;
 import net.fabricmc.loom.task.ProcessMinecraftJarTask;
 import net.fabricmc.loom.task.service.ClasspathGroupService;
-import net.fabricmc.loom.util.Checksum;
 import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.ExceptionUtil;
-import net.fabricmc.loom.util.ProcessUtil;
 import net.fabricmc.loom.util.gradle.GradleUtils;
 import net.fabricmc.loom.util.gradle.SourceSetHelper;
 import net.fabricmc.loom.util.gradle.daemon.DaemonUtils;
@@ -95,8 +83,6 @@ import net.fabricmc.loom.util.service.ScopedServiceFactory;
 import net.fabricmc.loom.util.service.ServiceFactory;
 
 public abstract class CompileConfiguration implements Runnable {
-	private static final Object GLOBAL_LOCK = "fabric.loom.internal.global.lock".intern();
-
 	@Inject
 	protected abstract Project getProject();
 
@@ -106,15 +92,13 @@ public abstract class CompileConfiguration implements Runnable {
 	@Override
 	public void run() {
 		LoomGradleExtension extension = LoomGradleExtension.get(getProject());
-		final boolean taskBasedMinecraft = TaskBasedMinecraftConfiguration.isEnabled(getProject());
-
-		if (taskBasedMinecraft) {
-			getTasks().register(TaskBasedMinecraftConfiguration.PROCESS_MINECRAFT_JARS_TASK, task -> {
-				task.setDescription("Process Minecraft jars lazily.");
-				task.setGroup(Constants.TaskGroup.FABRIC);
-			});
-			TaskBasedMinecraftConfiguration.configureIde(getProject());
-		}
+		MinecraftTaskGraph.create(getProject());
+		InstallerDataTaskConfiguration.register(getProject());
+		getTasks().register(TaskBasedMinecraftConfiguration.PROCESS_MINECRAFT_JARS_TASK, task -> {
+			task.setDescription("Process Minecraft jars lazily.");
+			task.setGroup(Constants.TaskGroup.FABRIC);
+		});
+		TaskBasedMinecraftConfiguration.configureIde(getProject());
 
 		getTasks().named(JavaPlugin.JAVADOC_TASK_NAME, Javadoc.class).configure(javadoc -> {
 			final SourceSet main = SourceSetHelper.getMainSourceSet(getProject());
@@ -130,25 +114,11 @@ public abstract class CompileConfiguration implements Runnable {
 
 			MinecraftSourceSets.get(getProject()).afterEvaluate(getProject());
 
-			final boolean previousRefreshDeps = extension.refreshDeps();
-
-			final LockResult lockResult = acquireProcessLockWaiting(getLockFile());
-
-			if (lockResult != LockResult.ACQUIRED_CLEAN) {
-				getProject().getLogger().lifecycle("Found existing cache lock file ({}), rebuilding loom cache. This may have been caused by a failed or canceled build.", lockResult);
-				extension.setRefreshDeps(true);
-			}
-
 			try {
 				final MinecraftMetadataProvider metadataProvider = MinecraftMetadataProvider.create(configContext);
 				extension.setMetadataProvider(metadataProvider);
-				final MinecraftProvider minecraftProvider;
-				final MappingConfigurationSetup mappingConfigurationSetup;
-
-				synchronized (getGlobalLockObject()) {
-					minecraftProvider = createMinecraftProvider(configContext, metadataProvider);
-					mappingConfigurationSetup = provideMinecraft(configContext, minecraftProvider);
-				}
+				final MinecraftProvider minecraftProvider = createMinecraftProvider(configContext, metadataProvider);
+				final MappingConfigurationSetup mappingConfigurationSetup = provideMinecraft(configContext, minecraftProvider);
 
 				if (mappingConfigurationSetup != null) {
 					extension.setMappingConfiguration(mappingConfigurationSetup.mappingConfiguration());
@@ -156,24 +126,17 @@ public abstract class CompileConfiguration implements Runnable {
 				}
 
 				createMappedMinecraftProviders(configContext);
-				registerGameProcessors(configContext);
 				final MinecraftJarProcessorManager minecraftJarProcessorManager = MinecraftJarProcessorManager.create(getProject());
 				createProcessedNamedMinecraftProvider(configContext, minecraftJarProcessorManager);
 
-				synchronized (getGlobalLockObject()) {
-					provideMappedMinecraft(configContext);
-				}
+				provideMappedMinecraft(configContext);
 
 				var dependencyManager = new LoomDependencyManager(getProject(), serviceFactory, extension);
 				dependencyManager.handleDependencies();
 			} catch (Exception e) {
 				ExceptionUtil.processException(e, DaemonUtils.Context.fromProject(getProject()));
-				disownLock();
 				throw ExceptionUtil.createDescriptiveWrapper(RuntimeException::new, "Failed to setup Minecraft", e);
 			}
-
-			releaseLock();
-			extension.setRefreshDeps(previousRefreshDeps);
 
 			MixinExtension mixin = LoomGradleExtension.get(getProject()).getMixin();
 
@@ -226,15 +189,15 @@ public abstract class CompileConfiguration implements Runnable {
 			// Created any layered mapping files.
 			LayeredMappingsFactory.afterEvaluate(configContext);
 
-			// Resolve the mapping files from the configuration
-			final DependencyInfo mappingsDep = DependencyInfo.create(getProject(), Configurations.MAPPINGS);
+			// Describe the configured mapping dependency without resolving task-backed files.
+			final DependencyInfo mappingsDep = DependencyInfo.createForMappings(getProject(), Configurations.MAPPINGS);
 			final MappingConfiguration mappingConfiguration = RemapMappingConfiguration.create(getProject(), configContext.serviceFactory(), mappingsDep, minecraftProvider);
 			return new MappingConfigurationSetup(mappingConfiguration, mappingsDep);
 		} else {
 			var annotations = project.getConfigurations().getByName(Configurations.ANNOTATIONS);
 
 			if (!annotations.getDependencies().isEmpty()) {
-				final DependencyInfo annotationsDep = DependencyInfo.create(getProject(), annotations);
+				final DependencyInfo annotationsDep = DependencyInfo.createForMappings(getProject(), annotations);
 				final MappingConfiguration mappingConfiguration = NoRemapMappingConfiguration.create(getProject(), annotationsDep, minecraftProvider);
 				return new MappingConfigurationSetup(mappingConfiguration, annotationsDep);
 			}
@@ -275,8 +238,6 @@ public abstract class CompileConfiguration implements Runnable {
 		final LoomGradleExtension extension = configContext.extension();
 		final IntermediaryMinecraftProvider<?> intermediaryMinecraftProvider = extension.disableObfuscation() ? null : extension.getIntermediaryMinecraftProvider();
 		final NamedMinecraftProvider<?> namedMinecraftProvider = extension.getNamedMinecraftProvider();
-		final boolean taskBasedMinecraft = TaskBasedMinecraftConfiguration.isEnabled(getProject());
-
 		final var provideContext = new AbstractMappedMinecraftProvider.ProvideContext(true, extension.refreshDeps(), configContext);
 
 		if (intermediaryMinecraftProvider != null) {
@@ -284,29 +245,41 @@ public abstract class CompileConfiguration implements Runnable {
 		}
 
 		final List<MinecraftJar> minecraftJars = namedMinecraftProvider.provide(
-				new AbstractMappedMinecraftProvider.ProvideContext(!taskBasedMinecraft, extension.refreshDeps(), configContext)
+				new AbstractMappedMinecraftProvider.ProvideContext(false, extension.refreshDeps(), configContext)
 		);
-
-		if (taskBasedMinecraft) {
-			applyTaskBasedMinecraftDependencies(namedMinecraftProvider, minecraftJars);
-		}
+		applyTaskBasedMinecraftDependencies(namedMinecraftProvider, minecraftJars);
 	}
 
 	private void applyTaskBasedMinecraftDependencies(NamedMinecraftProvider<?> namedMinecraftProvider, List<MinecraftJar> minecraftJars) {
 		final TaskProvider<Task> aggregateTask = getTasks().named(TaskBasedMinecraftConfiguration.PROCESS_MINECRAFT_JARS_TASK);
 		final Map<MinecraftJar.Type, TaskProvider<ProcessMinecraftJarTask>> processTasks = new EnumMap<>(MinecraftJar.Type.class);
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(getProject());
 
 		for (MinecraftJar minecraftJar : minecraftJars) {
 			final MinecraftJar outputJar = TaskBasedMinecraftConfiguration.getOutputJar(getProject(), minecraftJar);
+			final Path lineMappedJar = TaskBasedMinecraftConfiguration.getLineMappedPath(getProject(), minecraftJar);
+			final Path lineMappedInputHash = TaskBasedMinecraftConfiguration.getLineMappedInputHashPath(getProject(), minecraftJar);
+			final Path sourcesWorkJar = TaskBasedMinecraftConfiguration.getSourcesWorkPath(getProject(), minecraftJar);
+			final Path sourcesOutputJar = TaskBasedMinecraftConfiguration.getSourcesPath(getProject(), minecraftJar);
 			final String taskName = TaskBasedMinecraftConfiguration.getProcessTaskName(minecraftJar.getType());
 			final TaskProvider<ProcessMinecraftJarTask> processTask = getTasks().register(taskName, ProcessMinecraftJarTask.class, task -> {
 				task.setDescription("Process the %s Minecraft jar.".formatted(minecraftJar.getType()));
 				task.setGroup(Constants.TaskGroup.FABRIC);
 				task.getInputJar().fileValue(minecraftJar.toFile());
+				task.getLineMappedInputCandidates().from(lineMappedJar.toFile());
+				task.getLineMappedInputHashes().from(lineMappedInputHash.toFile());
+				task.getSourcesInputCandidates().from(sourcesWorkJar.toFile());
 				task.getOutputJar().fileValue(outputJar.toFile());
+				task.getOutputSourcesJars().from(sourcesOutputJar.toFile());
 			});
 
 			aggregateTask.configure(task -> task.dependsOn(processTask));
+			taskGraph.registerOutput(outputJar.getPath(), processTask);
+
+			if (taskGraph.hasProducer(minecraftJar.getPath())) {
+				taskGraph.dependsOn(processTask, minecraftJar.getPath());
+			}
+
 			processTasks.put(minecraftJar.getType(), processTask);
 		}
 
@@ -323,27 +296,6 @@ public abstract class CompileConfiguration implements Runnable {
 		}, namedMinecraftProvider.getDependencyTypes());
 
 		TaskBasedMinecraftConfiguration.configureEclipseSources(getProject(), minecraftJars);
-	}
-
-	private void registerGameProcessors(ConfigContext configContext) {
-		final LoomGradleExtension extension = configContext.extension();
-
-		final boolean enableTransitiveAccessWideners = extension.getEnableTransitiveAccessWideners().get();
-		extension.addMinecraftJarProcessor(AccessWidenerJarProcessor.class, "fabric-loom:access-widener", enableTransitiveAccessWideners, extension.getAccessWidenerPath());
-
-		if (extension.getEnableModProvidedJavadoc().get()) {
-			extension.addMinecraftJarProcessor(ModJavadocProcessor.class, "fabric-loom:mod-javadoc");
-		}
-
-		final InterfaceInjectionExtensionAPI interfaceInjection = extension.getInterfaceInjection();
-
-		if (interfaceInjection.isEnabled()) {
-			extension.addMinecraftJarProcessor(InterfaceInjectionProcessor.class, "fabric-loom:interface-inject", interfaceInjection.getEnableDependencyInterfaceInjection().get());
-		}
-
-		if (!extension.getRemapJsrAnnotationsToJetBrains().get()) {
-			extension.addMinecraftJarProcessor(JsrAnnotationRemapperProcessor.class, "fabric-loom:jsr-annotations");
-		}
 	}
 
 	private void setupMixinAp(MixinExtension mixin) {
@@ -393,6 +345,7 @@ public abstract class CompileConfiguration implements Runnable {
 			Provider<ClasspathGroupService.Options> optionsProvider = ClasspathGroupService.create(getProject());
 			test.getInputs().property("LoomClassPathGroups", optionsProvider);
 			test.getInputs().files(optionsProvider.map((ClasspathGroupService.Options::getExternalClasspathGroups)));
+			test.getInputs().files(optionsProvider.map((ClasspathGroupService.Options::getGeneratedClasspathGroups)));
 
 			test.doFirst(new Action<Task>() {
 				@Override
@@ -412,178 +365,6 @@ public abstract class CompileConfiguration implements Runnable {
 		});
 	}
 
-	private LockFile getLockFile() {
-		final LoomGradleExtension extension = LoomGradleExtension.get(getProject());
-		final Path cacheDirectory = extension.getFiles().getUserCache().toPath();
-		final String pathHash = Checksum.of(getProject()).sha1().hex();
-		return new LockFile(
-				cacheDirectory.resolve("." + pathHash + ".lock"),
-				"Lock for cache='%s', project='%s'".formatted(
-						cacheDirectory, getProject().absoluteProjectPath(getProject().getPath())
-				)
-		);
-	}
-
-	record LockFile(Path file, String description) {
-		@Override
-		public String toString() {
-			return this.description;
-		}
-	}
-
-	enum LockResult {
-		// acquired immediately or after waiting for another process to release
-		ACQUIRED_CLEAN,
-		// already owned by current pid
-		ACQUIRED_ALREADY_OWNED,
-		// acquired due to current owner not existing
-		ACQUIRED_PREVIOUS_OWNER_MISSING,
-		// acquired due to previous owner disowning the lock
-		ACQUIRED_PREVIOUS_OWNER_DISOWNED
-	}
-
-	private LockResult acquireProcessLockWaiting(LockFile lockFile) {
-		// one hour
-		return this.acquireProcessLockWaiting(lockFile, getDefaultTimeout());
-	}
-
-	private LockResult acquireProcessLockWaiting(LockFile lockFile, Duration timeout) {
-		try {
-			return this.acquireProcessLockWaiting_(lockFile, timeout);
-		} catch (final IOException e) {
-			throw new RuntimeException("Exception acquiring lock " + lockFile, e);
-		}
-	}
-
-	// Returns true if our process already owns the lock
-	@SuppressWarnings("BusyWait")
-	private LockResult acquireProcessLockWaiting_(LockFile lockFile, Duration timeout) throws IOException {
-		final long timeoutMs = timeout.toMillis();
-		final Logger logger = Logging.getLogger("loom_acquireProcessLockWaiting");
-		final long currentPid = ProcessHandle.current().pid();
-		boolean abrupt = false;
-		boolean disowned = false;
-
-		if (Files.exists(lockFile.file)) {
-			long lockingProcessId = -1;
-
-			try {
-				String lockValue = Files.readString(lockFile.file);
-
-				if ("disowned".equals(lockValue)) {
-					disowned = true;
-				} else {
-					lockingProcessId = Long.parseLong(lockValue);
-					logger.lifecycle("\"{}\" is currently held by pid '{}'.", lockFile, lockingProcessId);
-				}
-			} catch (final Exception ignored) {
-				// ignored
-			}
-
-			if (lockingProcessId == currentPid) {
-				return LockResult.ACQUIRED_ALREADY_OWNED;
-			}
-
-			Optional<ProcessHandle> handle = ProcessHandle.of(lockingProcessId);
-
-			if (disowned) {
-				logger.lifecycle("Previous process has disowned the lock due to abrupt termination.");
-				Files.deleteIfExists(lockFile.file);
-			} else if (handle.isEmpty()) {
-				logger.lifecycle("Locking process does not exist, assuming abrupt termination and deleting lock file.");
-				Files.deleteIfExists(lockFile.file);
-				abrupt = true;
-			} else {
-				ProcessUtil processUtil = ProcessUtil.create(getProject());
-				logger.lifecycle(processUtil.printWithParents(handle.get()));
-				logger.lifecycle("Waiting for lock to be released...");
-				long sleptMs = 0;
-
-				while (Files.exists(lockFile.file)) {
-					try {
-						Thread.sleep(100);
-					} catch (final InterruptedException e) {
-						Thread.currentThread().interrupt();
-					}
-
-					sleptMs += 100;
-
-					if (sleptMs >= 1000 * 60 && sleptMs % (1000 * 60) == 0L) {
-						logger.lifecycle(
-								"""
-										Have been waiting on "{}" held by pid '{}' for {} minute(s).
-										If this persists for an unreasonable length of time, kill this process, run './gradlew --stop' and then try again.""",
-								lockFile, lockingProcessId, sleptMs / 1000 / 60
-						);
-					}
-
-					if (sleptMs >= timeoutMs) {
-						throw new GradleException("Have been waiting on lock file '%s' for %s ms. Giving up as timeout is %s ms."
-								.formatted(lockFile, sleptMs, timeoutMs));
-					}
-				}
-			}
-		}
-
-		if (!Files.exists(lockFile.file.getParent())) {
-			Files.createDirectories(lockFile.file.getParent());
-		}
-
-		Files.writeString(lockFile.file, String.valueOf(currentPid));
-
-		if (disowned) {
-			return LockResult.ACQUIRED_PREVIOUS_OWNER_DISOWNED;
-		} else if (abrupt) {
-			return LockResult.ACQUIRED_PREVIOUS_OWNER_MISSING;
-		}
-
-		return LockResult.ACQUIRED_CLEAN;
-	}
-
-	private static Duration getDefaultTimeout() {
-		if (System.getenv("CI") != null) {
-			// Set a small timeout on CI, as it's unlikely going to unlock.
-			return Duration.ofMinutes(1);
-		}
-
-		return Duration.ofHours(1);
-	}
-
-	// When we fail to configure, write "disowned" to the lock file to release it from this process
-	// This allows the next run to rebuild without waiting for this process to exit
-	private void disownLock() {
-		final Path lock = getLockFile().file;
-
-		try {
-			Files.writeString(lock, "disowned");
-		} catch (IOException e) {
-			throw new RuntimeException(e);
-		}
-	}
-
-	private void releaseLock() {
-		final Path lock = getLockFile().file;
-
-		if (!Files.exists(lock)) {
-			return;
-		}
-
-		try {
-			Files.delete(lock);
-		} catch (IOException e1) {
-			try {
-				// If we failed to delete the lock file, moving it before trying to delete it may help.
-				final Path del = lock.resolveSibling(lock.getFileName() + ".del");
-				Files.move(lock, del);
-				Files.delete(del);
-			} catch (IOException e2) {
-				var exception = new UncheckedIOException("Failed to release getProject() configuration lock", e2);
-				exception.addSuppressed(e1);
-				throw exception;
-			}
-		}
-	}
-
 	private void finalizedBy(String a, String b) {
 		getTasks().named(a).configure(task -> task.finalizedBy(getTasks().named(b)));
 	}
@@ -596,11 +377,5 @@ public abstract class CompileConfiguration implements Runnable {
 				throw new UncheckedIOException(e);
 			}
 		});
-	}
-
-	// We need a lock that works across classloaders, a regular synchronized method will not work here.
-	// Interned strings are shared across classloaders, ensuring that all instances of loom use the same lock.
-	private static Object getGlobalLockObject() {
-		return GLOBAL_LOCK;
 	}
 }

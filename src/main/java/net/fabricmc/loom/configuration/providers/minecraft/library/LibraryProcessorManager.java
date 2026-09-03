@@ -96,17 +96,29 @@ public class LibraryProcessorManager {
 	}
 
 	public List<Library> processLibraries(List<Library> librariesIn, LibraryContext libraryContext) {
+		return processLibraries(librariesIn, libraryContext, true);
+	}
+
+	public List<Library> processLibrariesWithoutRepositoryChanges(List<Library> librariesIn, LibraryContext libraryContext) {
+		return processLibraries(librariesIn, libraryContext, false);
+	}
+
+	private List<Library> processLibraries(List<Library> librariesIn, LibraryContext libraryContext, boolean applyRepositories) {
 		final List<LibraryProcessor> processors = getProcessors(libraryContext);
 
 		if (processors.isEmpty()) {
 			return librariesIn;
 		}
 
-		return processLibraries(processors, librariesIn);
+		return processLibraries(processors, librariesIn, applyRepositories);
 	}
 
 	@VisibleForTesting
 	public List<Library> processLibraries(List<LibraryProcessor> processors, List<Library> librariesIn) {
+		return processLibraries(processors, librariesIn, true);
+	}
+
+	private List<Library> processLibraries(List<LibraryProcessor> processors, List<Library> librariesIn, boolean applyRepositories) {
 		var libraries = new ArrayList<>(librariesIn);
 
 		for (LibraryProcessor processor : processors) {
@@ -119,7 +131,9 @@ public class LibraryProcessorManager {
 				}
 			}
 
-			processor.applyRepositories(repositories);
+			if (applyRepositories) {
+				processor.applyRepositories(repositories);
+			}
 
 			libraries = processedLibraries;
 		}

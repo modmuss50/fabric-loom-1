@@ -26,75 +26,68 @@ package net.fabricmc.loom.configuration.fabricapi;
 
 import java.io.File;
 import java.io.UncheckedIOException;
-import java.util.Collections;
+import java.net.URISyntaxException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import javax.inject.Inject;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.gradle.api.Project;
-import org.gradle.api.artifacts.Dependency;
+import org.gradle.api.provider.Property;
+import org.gradle.api.provider.Provider;
+import org.gradle.api.provider.ValueSource;
+import org.gradle.api.provider.ValueSourceParameters;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
 import net.fabricmc.loom.LoomGradleExtension;
+import net.fabricmc.loom.util.download.Download;
 import net.fabricmc.loom.util.download.DownloadException;
 
 public abstract class FabricApiVersions {
 	@Inject
 	protected abstract Project getProject();
 
-	private final HashMap<String, Map<String, String>> moduleVersionCache = new HashMap<>();
-	private final HashMap<String, Map<String, String>> deprecatedModuleVersionCache = new HashMap<>();
+	private final Map<String, Provider<Map<String, String>>> apiModuleVersions = new ConcurrentHashMap<>();
+	private final Map<String, Provider<Map<String, String>>> deprecatedApiModuleVersions = new ConcurrentHashMap<>();
 
-	public Dependency module(String moduleName, String fabricApiVersion) {
-		return getProject().getDependencies()
-				.create(getDependencyNotation(moduleName, fabricApiVersion));
+	public Provider<String> module(String moduleName, String fabricApiVersion) {
+		return moduleVersion(moduleName, fabricApiVersion)
+				.map(moduleVersion -> String.format("net.fabricmc.fabric-api:%s:%s", moduleName, moduleVersion));
 	}
 
-	public String moduleVersion(String moduleName, String fabricApiVersion) {
-		String moduleVersion = moduleVersionCache
-				.computeIfAbsent(fabricApiVersion, this::getApiModuleVersions)
-				.get(moduleName);
+	public Provider<String> moduleVersion(String moduleName, String fabricApiVersion) {
+		final Provider<String> moduleVersion = apiModuleVersions
+				.computeIfAbsent(fabricApiVersion, version -> createModuleVersionsProvider("fabric-api", version, false))
+				.map(versions -> versions.get(moduleName))
+				.orElse(deprecatedApiModuleVersions
+						.computeIfAbsent(fabricApiVersion, version -> createModuleVersionsProvider("fabric-api-deprecated", version, true))
+						.map(versions -> versions.get(moduleName)));
 
-		if (moduleVersion == null) {
-			moduleVersion = deprecatedModuleVersionCache
-					.computeIfAbsent(fabricApiVersion, this::getDeprecatedApiModuleVersions)
-					.get(moduleName);
-		}
-
-		if (moduleVersion == null) {
+		return moduleVersion.orElse(getProject().getProviders().provider(() -> {
 			throw new RuntimeException("Failed to find module version for module: " + moduleName);
-		}
-
-		return moduleVersion;
+		}));
 	}
 
-	private String getDependencyNotation(String moduleName, String fabricApiVersion) {
-		return String.format("net.fabricmc.fabric-api:%s:%s", moduleName, moduleVersion(moduleName, fabricApiVersion));
+	private Provider<Map<String, String>> createModuleVersionsProvider(String name, String fabricApiVersion, boolean missingAllowed) {
+		final LoomGradleExtension extension = LoomGradleExtension.get(getProject());
+
+		return getProject().getProviders().of(ModuleVersionsValueSource.class, spec -> {
+			final ModuleVersionsValueSource.Parameters parameters = spec.getParameters();
+			parameters.getName().set(name);
+			parameters.getFabricApiVersion().set(fabricApiVersion);
+			parameters.getUserCachePath().set(extension.getFiles().getUserCache().getAbsolutePath());
+			parameters.getOffline().set(getProject().getGradle().getStartParameter().isOffline());
+			parameters.getRefresh().set(extension.refreshDeps());
+			parameters.getMissingAllowed().set(missingAllowed);
+		});
 	}
 
-	private Map<String, String> getApiModuleVersions(String fabricApiVersion) {
-		try {
-			return populateModuleVersionMap(getApiMavenPom(fabricApiVersion));
-		} catch (PomNotFoundException e) {
-			throw new RuntimeException("Could not find fabric-api version: " + fabricApiVersion);
-		}
-	}
-
-	private Map<String, String> getDeprecatedApiModuleVersions(String fabricApiVersion) {
-		try {
-			return populateModuleVersionMap(getDeprecatedApiMavenPom(fabricApiVersion));
-		} catch (PomNotFoundException e) {
-			// Not all fabric-api versions have deprecated modules, return an empty map to cache this fact.
-			return Collections.emptyMap();
-		}
-	}
-
-	private Map<String, String> populateModuleVersionMap(File pomFile) {
+	private static Map<String, String> populateModuleVersionMap(File pomFile) {
 		try {
 			DocumentBuilderFactory docFactory = DocumentBuilderFactory.newInstance();
 			DocumentBuilder docBuilder = docFactory.newDocumentBuilder();
@@ -122,31 +115,68 @@ public abstract class FabricApiVersions {
 		}
 	}
 
-	private File getApiMavenPom(String fabricApiVersion) throws PomNotFoundException {
-		return getPom("fabric-api", fabricApiVersion);
-	}
-
-	private File getDeprecatedApiMavenPom(String fabricApiVersion) throws PomNotFoundException {
-		return getPom("fabric-api-deprecated", fabricApiVersion);
-	}
-
-	private File getPom(String name, String version) throws PomNotFoundException {
-		final LoomGradleExtension extension = LoomGradleExtension.get(getProject());
-		final var mavenPom = new File(extension.getFiles().getUserCache(), "fabric-api/%s-%s.pom".formatted(name, version));
+	private static File getPom(String name, String version, File userCache, boolean offline, boolean refresh) throws PomNotFoundException {
+		final File mavenPom = new File(userCache, "fabric-api/%s-%s.pom".formatted(name, version));
 
 		try {
-			extension.download(String.format("https://maven.fabricmc.net/net/fabricmc/fabric-api/%2$s/%1$s/%2$s-%1$s.pom", version, name))
-					.defaultCache()
-					.downloadPath(mavenPom.toPath());
+			final var download = Download.create(String.format("https://maven.fabricmc.net/net/fabricmc/fabric-api/%2$s/%1$s/%2$s-%1$s.pom", version, name));
+
+			if (offline) {
+				download.offline();
+			}
+
+			if (refresh) {
+				download.forceDownload();
+			}
+
+			download.defaultCache().downloadPath(mavenPom.toPath());
 		} catch (DownloadException e) {
 			if (e.getStatusCode() == 404) {
 				throw new PomNotFoundException(e);
 			}
 
 			throw new UncheckedIOException("Failed to download maven info to " + mavenPom.getName(), e);
+		} catch (URISyntaxException e) {
+			throw new RuntimeException("Failed to create Fabric API POM download", e);
 		}
 
 		return mavenPom;
+	}
+
+	public abstract static class ModuleVersionsValueSource implements ValueSource<Map<String, String>, ModuleVersionsValueSource.Parameters> {
+		public interface Parameters extends ValueSourceParameters {
+			Property<String> getName();
+
+			Property<String> getFabricApiVersion();
+
+			Property<String> getUserCachePath();
+
+			Property<Boolean> getOffline();
+
+			Property<Boolean> getRefresh();
+
+			Property<Boolean> getMissingAllowed();
+		}
+
+		@Override
+		public Map<String, String> obtain() {
+			final Parameters parameters = getParameters();
+			final String name = parameters.getName().get();
+			final String fabricApiVersion = parameters.getFabricApiVersion().get();
+			final File userCache = new File(parameters.getUserCachePath().get());
+			final boolean offline = parameters.getOffline().get();
+			final boolean refresh = parameters.getRefresh().get();
+
+			try {
+				return populateModuleVersionMap(getPom(name, fabricApiVersion, userCache, offline, refresh));
+			} catch (PomNotFoundException e) {
+				if (parameters.getMissingAllowed().get()) {
+					return Map.of();
+				}
+
+				throw new RuntimeException("Could not find fabric-api version: " + fabricApiVersion);
+			}
+		}
 	}
 
 	private static class PomNotFoundException extends Exception {

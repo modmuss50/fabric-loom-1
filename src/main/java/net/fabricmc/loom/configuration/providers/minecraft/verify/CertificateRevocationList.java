@@ -39,6 +39,7 @@ import java.util.Collection;
 import java.util.List;
 
 import org.gradle.api.Project;
+import org.jetbrains.annotations.ApiStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -95,7 +96,8 @@ public record CertificateRevocationList(Collection<X509CRL> crls, boolean downlo
 		return parse(path);
 	}
 
-	static X509CRL parse(Path path) throws IOException {
+	@ApiStatus.Internal
+	public static X509CRL parse(Path path) throws IOException {
 		try (InputStream inStream = Files.newInputStream(path)) {
 			CertificateFactory cf = CertificateFactory.getInstance("X.509");
 			return (X509CRL) cf.generateCRL(inStream);

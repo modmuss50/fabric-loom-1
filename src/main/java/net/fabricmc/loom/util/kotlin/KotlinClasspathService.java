@@ -33,6 +33,7 @@ import java.util.stream.Collectors;
 
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
+import org.gradle.api.artifacts.Dependency;
 import org.gradle.api.file.ConfigurableFileCollection;
 import org.gradle.api.provider.Property;
 import org.gradle.api.provider.Provider;
@@ -59,24 +60,24 @@ public final class KotlinClasspathService extends Service<KotlinClasspathService
 			return project.getObjects().property(Options.class);
 		}
 
-		return createOptions(
-				project,
-				KotlinPluginUtils.getKotlinPluginVersion(project)
-		);
+		return createOptions(project, project.provider(() -> KotlinPluginUtils.getKotlinPluginVersion(project)));
 	}
 
-	private static Provider<Options> createOptions(Project project, String kotlinVersion) {
+	private static Provider<Options> createOptions(Project project, Provider<String> kotlinVersion) {
 		// Create a detached config to resolve the kotlin std lib for the provided version.
-		Configuration detachedConfiguration = project.getConfigurations().detachedConfiguration(
-				project.getDependencies().create("org.jetbrains.kotlin:kotlin-stdlib:" + kotlinVersion),
-				// Load kotlinx-metadata-jvm like this to work around: https://github.com/gradle/gradle/issues/14727
-				project.getDependencies().create("org.jetbrains.kotlin:kotlin-metadata-jvm:" + kotlinVersion)
-		);
+		Configuration detachedConfiguration = project.getConfigurations().detachedConfiguration();
+		detachedConfiguration.getDependencies().addLater(kotlinVersion.map(version -> dependency(project, "kotlin-stdlib", version)));
+		// Load kotlinx-metadata-jvm like this to work around: https://github.com/gradle/gradle/issues/14727
+		detachedConfiguration.getDependencies().addLater(kotlinVersion.map(version -> dependency(project, "kotlin-metadata-jvm", version)));
 
 		return TYPE.create(project, options -> {
 			options.getClasspath().from(detachedConfiguration);
 			options.getKotlinVersion().set(kotlinVersion);
 		});
+	}
+
+	private static Dependency dependency(Project project, String module, String version) {
+		return project.getDependencies().create("org.jetbrains.kotlin:" + module + ':' + version);
 	}
 
 	public KotlinClasspathService(Options options, ServiceFactory serviceFactory) {

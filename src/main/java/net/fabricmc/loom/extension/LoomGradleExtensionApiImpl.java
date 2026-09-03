@@ -73,8 +73,8 @@ import net.fabricmc.loom.configuration.providers.mappings.LayeredMappingSpecBuil
 import net.fabricmc.loom.configuration.providers.mappings.LayeredMappingsFactory;
 import net.fabricmc.loom.configuration.providers.minecraft.ManifestLocations;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJarConfiguration;
-import net.fabricmc.loom.configuration.providers.minecraft.MinecraftMetadataProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftSourceSets;
+import net.fabricmc.loom.configuration.providers.minecraft.TaskBasedMinecraftConfiguration;
 import net.fabricmc.loom.task.GenerateSourcesTask;
 import net.fabricmc.loom.task.NestJarsAction;
 import net.fabricmc.loom.task.RemapJarTask;
@@ -152,13 +152,13 @@ public abstract class LoomGradleExtensionApiImpl implements LoomGradleExtensionA
 		this.intermediary = project.getObjects().property(String.class)
 				.convention(DEFAULT_INTERMEDIARY_URL);
 		this.productionNamespace = project.getObjects().property(String.class);
-		this.productionNamespace.convention(project.provider(() -> LoomGradleExtension.get(project).getMetadataProvider().isUnobfuscated() ? MappingsNamespace.OFFICIAL.toString() : MappingsNamespace.INTERMEDIARY.toString()));
+		this.productionNamespace.convention(project.provider(() -> LoomGradleExtension.get(project).disableObfuscation() ? MappingsNamespace.OFFICIAL.toString() : MappingsNamespace.INTERMEDIARY.toString()));
 		this.productionNamespace.finalizeValueOnRead();
 		this.useIntermediateMappings = project.getObjects().property(Boolean.class);
-		this.useIntermediateMappings.convention(project.provider(() -> !LoomGradleExtension.get(project).getMetadataProvider().isUnobfuscated()));
+		this.useIntermediateMappings.convention(project.provider(() -> !LoomGradleExtension.get(project).disableObfuscation()));
 		this.useIntermediateMappings.finalizeValueOnRead();
 		this.defaultMixinRemapType = project.getObjects().property(String.class);
-		this.defaultMixinRemapType.convention(project.provider(() -> LoomGradleExtension.get(project).getMetadataProvider().isUnobfuscated() ? ArtifactMetadata.MixinRemapType.STATIC.name() : ArtifactMetadata.MixinRemapType.MIXIN.name()));
+		this.defaultMixinRemapType.convention(project.provider(() -> LoomGradleExtension.get(project).disableObfuscation() ? ArtifactMetadata.MixinRemapType.STATIC.name() : ArtifactMetadata.MixinRemapType.MIXIN.name()));
 		this.defaultMixinRemapType.finalizeValueOnRead();
 
 		this.intermediateMappingsProvider = project.getObjects().property(IntermediateMappingsProvider.class);
@@ -177,22 +177,7 @@ public abstract class LoomGradleExtensionApiImpl implements LoomGradleExtensionA
 
 		//noinspection unchecked
 		this.minecraftJarConfiguration = project.getObjects().property((Class<MinecraftJarConfiguration<?, ?, ?>>) (Class<?>) MinecraftJarConfiguration.class)
-				.convention(project.provider(() -> {
-					final LoomGradleExtension extension = LoomGradleExtension.get(project);
-					final MinecraftMetadataProvider metadataProvider = extension.getMetadataProvider();
-
-					// if no configuration is selected by the user, attempt to select one
-					// based on the mc version and which sides are present for it
-					if (!metadataProvider.getVersionMeta().hasServer()) {
-						return MinecraftJarConfiguration.CLIENT_ONLY;
-					} else if (!metadataProvider.getVersionMeta().hasClient()) {
-						return MinecraftJarConfiguration.SERVER_ONLY;
-					} else if (!metadataProvider.getVersionMeta().isLegacyVersion()) {
-						return MinecraftJarConfiguration.MERGED;
-					} else {
-						return MinecraftJarConfiguration.LEGACY_MERGED;
-					}
-				}));
+				.convention(MinecraftJarConfiguration.MERGED);
 		this.minecraftJarConfiguration.finalizeValueOnRead();
 
 		this.accessWidener.finalizeValueOnRead();
@@ -298,7 +283,11 @@ public abstract class LoomGradleExtensionApiImpl implements LoomGradleExtensionA
 		layeredSpecBuilderScope.set(false);
 
 		final LayeredMappingSpec builtSpec = builder.build();
-		final LayeredMappingsFactory layeredMappingsFactory = layeredMappingsDependencyMap.computeIfAbsent(builtSpec, LayeredMappingsFactory::new);
+		final int declarationIndex = layeredMappingsDependencyMap.size();
+		final LayeredMappingsFactory layeredMappingsFactory = layeredMappingsDependencyMap.computeIfAbsent(
+				builtSpec,
+				ignored -> new LayeredMappingsFactory(builtSpec, declarationIndex)
+		);
 		return layeredMappingsFactory.createDependency(getProject());
 	}
 
@@ -566,7 +555,14 @@ public abstract class LoomGradleExtensionApiImpl implements LoomGradleExtensionA
 	@Override
 	public FileCollection getNamedMinecraftJars() {
 		final ConfigurableFileCollection jars = getProject().getObjects().fileCollection();
-		jars.from(getProject().provider(() -> LoomGradleExtension.get(getProject()).getMinecraftJars(MappingsNamespace.NAMED)));
+		jars.from(getProject().provider(() -> {
+			final LoomGradleExtension extension = LoomGradleExtension.get(getProject());
+			return extension.getNamedMinecraftProvider().getMinecraftJars().stream()
+					.map(minecraftJar -> TaskBasedMinecraftConfiguration.getOutputPath(getProject(), minecraftJar))
+					.map(path -> path.toFile())
+					.toList();
+		}));
+		jars.builtBy(TaskBasedMinecraftConfiguration.PROCESS_MINECRAFT_JARS_TASK);
 		return jars;
 	}
 

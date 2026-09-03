@@ -24,62 +24,103 @@
 
 package net.fabricmc.loom.configuration.ide;
 
-import java.util.ArrayList;
-import java.util.Collection;
+import java.io.File;
+import java.io.Serial;
+import java.io.Serializable;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 import org.gradle.api.Project;
-import org.gradle.api.artifacts.ModuleVersionIdentifier;
-import org.gradle.api.artifacts.ResolvedArtifact;
-import org.gradle.api.artifacts.ResolvedModuleVersion;
+import org.gradle.api.specs.Spec;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.api.RunConfiguration;
-import net.fabricmc.loom.configuration.providers.BundleMetadata;
+import net.fabricmc.loom.task.DownloadMinecraftLibrariesTask;
 import net.fabricmc.loom.util.Constants;
 
 public class RuntimeLibraries {
+	private static final Logger LOGGER = LoggerFactory.getLogger(RuntimeLibraries.class);
+
 	public static List<String> getExcludedLibraryPaths(Project project, RunConfiguration runConfiguration) {
-		if (!runConfiguration.getRuntimeEnvironment().get().toLowerCase(Locale.ROOT).equals("server")) {
+		if (!isServer(runConfiguration)) {
 			return Collections.emptyList();
 		}
 
-		final BundleMetadata bundleMetadata = LoomGradleExtension.get(project).getMinecraftProvider().getServerBundleMetadata();
+		final LibraryPaths paths = getLibraryPaths(project);
 
-		if (bundleMetadata == null) {
-			// Legacy version
-			return Collections.emptyList();
+		// This is called from the lazily evaluated ideaSyncTask input. Resolving the configuration here
+		// happens after the library task has run, rather than reading task outputs during configuration.
+		return project.getConfigurations().getByName(Constants.Configurations.MINECRAFT_CLIENT_RUNTIME_LIBRARIES).getFiles().stream()
+				.map(file -> file.toPath().toAbsolutePath().normalize())
+				.filter(paths::isClientOnly)
+				.map(Path::toString)
+				.sorted()
+				.toList();
+	}
+
+	public static Spec<File> createLibraryFilter(Project project, RunConfiguration runConfiguration, String configName) {
+		final LibraryPaths paths = getLibraryPaths(project);
+		return new ServerLibraryFilter(
+				isServer(runConfiguration),
+				paths.clientRuntime().toString(),
+				paths.clientRuntimeNatives().toString(),
+				configName
+		);
+	}
+
+	private static boolean isServer(RunConfiguration runConfiguration) {
+		return runConfiguration.getRuntimeEnvironment().get().toLowerCase(Locale.ROOT).equals("server");
+	}
+
+	private static LibraryPaths getLibraryPaths(Project project) {
+		final Path output = LoomGradleExtension.get(project).getMinecraftProvider().path("libraries").toAbsolutePath().normalize();
+		return new LibraryPaths(
+				output.resolve(DownloadMinecraftLibrariesTask.CLIENT_RUNTIME_DIRECTORY),
+				output.resolve(DownloadMinecraftLibrariesTask.CLIENT_RUNTIME_NATIVES_DIRECTORY)
+		);
+	}
+
+	private record LibraryPaths(Path clientRuntime, Path clientRuntimeNatives) {
+		private boolean isClientOnly(Path path) {
+			return path.startsWith(clientRuntime) || path.startsWith(clientRuntimeNatives);
+		}
+	}
+
+	private static final class ServerLibraryFilter implements Spec<File>, Serializable {
+		@Serial
+		private static final long serialVersionUID = 1L;
+
+		private final boolean server;
+		private final String clientRuntime;
+		private final String clientRuntimeNatives;
+		private final String configName;
+
+		private ServerLibraryFilter(boolean server, String clientRuntime, String clientRuntimeNatives, String configName) {
+			this.server = server;
+			this.clientRuntime = clientRuntime;
+			this.clientRuntimeNatives = clientRuntimeNatives;
+			this.configName = configName;
 		}
 
-		final Set<ResolvedArtifact> clientLibraries = getArtifacts(project, Constants.Configurations.MINECRAFT_CLIENT_RUNTIME_LIBRARIES);
-		final Set<ResolvedArtifact> serverLibraries = getArtifacts(project, Constants.Configurations.MINECRAFT_SERVER_RUNTIME_LIBRARIES);
-		final List<String> clientOnlyLibraries = new ArrayList<>();
-
-		for (ResolvedArtifact library : clientLibraries) {
-			if (!containsLibrary(serverLibraries, library.getModuleVersion().getId())) {
-				clientOnlyLibraries.add(library.getFile().getAbsolutePath());
+		@Override
+		public boolean isSatisfiedBy(File element) {
+			if (!server) {
+				return true;
 			}
+
+			final Path elementPath = element.toPath().toAbsolutePath().normalize();
+			final LibraryPaths paths = new LibraryPaths(Path.of(clientRuntime), Path.of(clientRuntimeNatives));
+
+			if (!paths.isClientOnly(elementPath)) {
+				return true;
+			}
+
+			LOGGER.debug("Excluding library {} from {} run config", element.getName(), configName);
+			return false;
 		}
-
-		return clientOnlyLibraries;
-	}
-
-	private static Set<ResolvedArtifact> getArtifacts(Project project, String configuration) {
-		return project.getConfigurations().getByName(configuration).getHierarchy()
-				.stream()
-				.map(c -> c.getResolvedConfiguration().getResolvedArtifacts())
-				.flatMap(Collection::stream)
-				.collect(Collectors.toSet());
-	}
-
-	private static boolean containsLibrary(Set<ResolvedArtifact> artifacts, ModuleVersionIdentifier identifier) {
-		return artifacts.stream()
-				.map(ResolvedArtifact::getModuleVersion)
-				.map(ResolvedModuleVersion::getId)
-				.anyMatch(test -> test.getGroup().equals(identifier.getGroup()) && test.getName().equals(identifier.getName()));
 	}
 }

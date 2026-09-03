@@ -47,6 +47,9 @@ import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.api.mappings.intermediate.IntermediateMappingsProvider;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftTaskGraph;
+import net.fabricmc.loom.task.PrepareIntermediaryMappingsTask;
+import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.Lazy;
 import net.fabricmc.loom.util.service.Service;
 import net.fabricmc.loom.util.service.ServiceFactory;
@@ -57,6 +60,7 @@ import net.fabricmc.mappingio.tree.MemoryMappingTree;
 
 public final class IntermediateMappingsService extends Service<IntermediateMappingsService.Options> {
 	public static final ServiceType<Options, IntermediateMappingsService> TYPE = new ServiceType<>(Options.class, IntermediateMappingsService.class);
+	public static final String PREPARE_INTERMEDIARY_MAPPINGS_TASK = "prepareMinecraftIntermediaryMappings";
 	private static final Logger LOGGER = LoggerFactory.getLogger(IntermediateMappingsService.class);
 
 	public interface Options extends Service.Options {
@@ -72,6 +76,35 @@ public final class IntermediateMappingsService extends Service<IntermediateMappi
 
 	public IntermediateMappingsService(Options options, ServiceFactory serviceFactory) {
 		super(options, serviceFactory);
+	}
+
+	public static Path registerPreparationTask(Project project, MinecraftProvider minecraftProvider) {
+		final LoomGradleExtension extension = LoomGradleExtension.get(project);
+		final IntermediateMappingsProvider intermediateProvider = extension.getIntermediateMappingsProvider();
+
+		if (!(intermediateProvider instanceof IntermediaryMappingsProvider builtInProvider)) {
+			throw new UnsupportedOperationException("Task-backed Minecraft setup currently only supports Loom's built-in intermediary mappings provider");
+		}
+
+		final Path intermediaryTiny = minecraftProvider.file(intermediateProvider.getName() + ".tiny").toPath();
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(project);
+
+		if (taskGraph.hasProducer(intermediaryTiny)) {
+			return intermediaryTiny;
+		}
+
+		final var prepareTask = project.getTasks().register(PREPARE_INTERMEDIARY_MAPPINGS_TASK, PrepareIntermediaryMappingsTask.class, task -> {
+			task.setDescription("Downloads and extracts the intermediary mappings.");
+			task.setGroup(Constants.TaskGroup.FABRIC);
+			task.getMinecraftMetadata().fileValue(minecraftProvider.getMinecraftMetadataPath().toFile());
+			task.getIntermediaryUrl().set(builtInProvider.getIntermediaryUrl());
+			task.getOffline().set(project.getGradle().getStartParameter().isOffline());
+			task.getRefresh().set(builtInProvider.getRefreshDeps());
+			task.getOutputMappings().fileValue(intermediaryTiny.toFile());
+		});
+		taskGraph.dependsOn(prepareTask, minecraftProvider.getMinecraftMetadataPath());
+		taskGraph.registerOutput(intermediaryTiny, prepareTask);
+		return intermediaryTiny;
 	}
 
 	public static Provider<Options> createOptions(Project project, MinecraftProvider minecraftProvider) {

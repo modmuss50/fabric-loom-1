@@ -33,14 +33,13 @@ import org.jspecify.annotations.Nullable;
 import net.fabricmc.classtweaker.api.ClassTweakerReader;
 import net.fabricmc.classtweaker.api.visitor.ClassTweakerVisitor;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
-import net.fabricmc.loom.util.Checksum;
 import net.fabricmc.loom.util.LazyCloseable;
 import net.fabricmc.loom.util.fmj.ModEnvironment;
 import net.fabricmc.tinyremapper.TinyRemapper;
 
-public record LocalAccessWidenerEntry(Path path, String hash) implements AccessWidenerEntry {
+public record LocalAccessWidenerEntry(Path path) implements AccessWidenerEntry {
 	public static LocalAccessWidenerEntry create(Path path) {
-		return new LocalAccessWidenerEntry(path, Checksum.of(path).sha1().hex());
+		return new LocalAccessWidenerEntry(path);
 	}
 
 	@Override
@@ -79,6 +78,6 @@ public record LocalAccessWidenerEntry(Path path, String hash) implements AccessW
 
 	@Override
 	public int hashCode() {
-		return hash.hashCode();
+		return getSortKey().hashCode();
 	}
 }

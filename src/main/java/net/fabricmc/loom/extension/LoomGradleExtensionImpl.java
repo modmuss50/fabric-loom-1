@@ -25,7 +25,6 @@
 package net.fabricmc.loom.extension;
 
 import java.net.URISyntaxException;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -57,6 +56,7 @@ import net.fabricmc.loom.configuration.providers.mappings.MappingConfiguration;
 import net.fabricmc.loom.configuration.providers.mappings.RemapMappingConfiguration;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftMetadataProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftTaskGraph;
 import net.fabricmc.loom.configuration.providers.minecraft.library.LibraryProcessorManager;
 import net.fabricmc.loom.configuration.providers.minecraft.mapped.IntermediaryMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.mapped.NamedMinecraftProvider;
@@ -213,11 +213,20 @@ public abstract class LoomGradleExtensionImpl extends LoomGradleExtensionApiImpl
 
 	@Override
 	public FileCollection getMinecraftJarsCollection(MappingsNamespace mappingsNamespace) {
-		return getProject().files(
-			getProject().provider(() ->
-				getProject().files(getMinecraftJars(mappingsNamespace).stream().map(Path::toFile).toList())
-			)
-		);
+		final ConfigurableFileCollection jars = getProject().getObjects().fileCollection();
+		jars.from(getProject().provider(() -> {
+			final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(getProject());
+			return getMinecraftJars(mappingsNamespace).stream()
+					.map(taskGraph::files)
+					.toList();
+		}));
+		jars.builtBy(getProject().provider(() -> {
+			final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(getProject());
+			return getMinecraftJars(mappingsNamespace).stream()
+					.map(taskGraph::getProducer)
+					.toList();
+		}));
+		return jars;
 	}
 
 	@Override

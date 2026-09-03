@@ -27,6 +27,7 @@ package net.fabricmc.loom.util;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
@@ -66,7 +67,16 @@ public final class TinyRemapperHelper {
 	public static TinyRemapper getTinyRemapper(Project project, ServiceFactory serviceFactory, String fromM, String toM, boolean fixRecords, Consumer<TinyRemapper.Builder> builderConsumer) throws IOException {
 		LoomGradleExtension extension = LoomGradleExtension.get(project);
 		MemoryMappingTree mappingTree = extension.getMappingConfiguration().getMappingsService(project, serviceFactory).getMappingTree();
+		return getTinyRemapper(mappingTree, fromM, toM, fixRecords, extension.getKnownIndyBsms().get(), builderConsumer);
+	}
 
+	public static TinyRemapper getTinyRemapper(Path mappings, String fromM, String toM, boolean fixRecords, Set<String> knownIndyBsms, Consumer<TinyRemapper.Builder> builderConsumer) throws IOException {
+		MemoryMappingTree mappingTree = new MemoryMappingTree();
+		MappingReader.read(mappings, mappingTree);
+		return getTinyRemapper(mappingTree, fromM, toM, fixRecords, knownIndyBsms, builderConsumer);
+	}
+
+	public static TinyRemapper getTinyRemapper(MemoryMappingTree mappingTree, String fromM, String toM, boolean fixRecords, Set<String> knownIndyBsms, Consumer<TinyRemapper.Builder> builderConsumer) {
 		int intermediaryNsId = mappingTree.getNamespaceId(MappingsNamespace.INTERMEDIARY.toString());
 		int fromNsId = mappingTree.getNamespaceId(fromM);
 
@@ -77,7 +87,7 @@ public final class TinyRemapperHelper {
 				.rebuildSourceFilenames(true)
 				.invalidLvNamePattern(MC_LV_PATTERN)
 				.inferNameFromSameLvIndex(true)
-				.withKnownIndyBsm(extension.getKnownIndyBsms().get())
+				.withKnownIndyBsm(knownIndyBsms)
 				.extraPreApplyVisitor((cls, next) -> {
 					if (fixRecords && !cls.isRecord() && "java/lang/Record".equals(cls.getSuperName())) {
 						return new RecordComponentFixVisitor(next, mappingTree, fromNsId, intermediaryNsId);

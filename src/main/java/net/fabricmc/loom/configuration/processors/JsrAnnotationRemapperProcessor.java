@@ -47,6 +47,10 @@ public class JsrAnnotationRemapperProcessor implements MinecraftJarProcessor<Jsr
 			"org/jetbrains/annotations/Unmodifiable", "javax/annotation/concurrent/Immutable"
 	);
 
+	static Map<String, String> annotationMappings() {
+		return JETBRAINS_TO_JSR;
+	}
+
 	private final String name;
 
 	@Inject
@@ -61,15 +65,19 @@ public class JsrAnnotationRemapperProcessor implements MinecraftJarProcessor<Jsr
 
 	@Override
 	public void processJar(Path jar, Spec spec, ProcessorContext context) throws IOException {
+		remapAnnotations(jar, spec.annotationMapping());
+	}
+
+	static void remapAnnotations(Path jar, Map<String, String> annotationMapping) {
 		TinyRemapper tinyRemapper = TinyRemapper.newRemapper(TinyRemapperLoggerAdapter.INSTANCE)
-				.withMappings(spec.getMappings())
+				.withMappings(out -> annotationMapping.forEach(out::acceptClass))
 				.build();
 
 		try (OutputConsumerPath outputConsumer = new OutputConsumerPath.Builder(jar).build()) {
 			tinyRemapper.readInputs(jar);
 			tinyRemapper.apply(outputConsumer);
 		} catch (Exception e) {
-			throw new RuntimeException("Failed to remap JAR " + jar + " with mapping " + spec.annotationMapping(), e);
+			throw new RuntimeException("Failed to remap JAR " + jar + " with mapping " + annotationMapping, e);
 		} finally {
 			tinyRemapper.finish();
 		}

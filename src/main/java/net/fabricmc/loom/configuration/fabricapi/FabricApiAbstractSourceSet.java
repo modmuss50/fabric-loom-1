@@ -71,7 +71,7 @@ abstract class FabricApiAbstractSourceSet {
 			return fabricModJson.getId();
 		}));
 
-		extension.getMods().create(modId.get(), mod -> {
+		extension.getMods().create("fabric-api-" + getSourceSetName(), mod -> {
 			// Create a classpath group for this mod. Assume that the main sourceset is already in a group.
 			mod.sourceSet(getSourceSetName());
 		});

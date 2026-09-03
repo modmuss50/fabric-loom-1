@@ -28,6 +28,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,6 +51,7 @@ import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.project.IsolatedProject;
 import org.gradle.api.provider.ListProperty;
 import org.gradle.api.provider.Property;
+import org.gradle.api.provider.Provider;
 import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.Nested;
 import org.gradle.api.tasks.OutputFile;
@@ -62,6 +64,7 @@ import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
 
 import net.fabricmc.loom.api.RunConfiguration;
+import net.fabricmc.loom.configuration.InstallerDataTaskConfiguration;
 import net.fabricmc.loom.configuration.ide.DefaultRunConfigurationSettings;
 import net.fabricmc.loom.configuration.ide.RunConfigUtils;
 import net.fabricmc.loom.configuration.ide.RuntimeLibraries;
@@ -76,7 +79,7 @@ public abstract class IdeaSyncTask extends AbstractLoomTask {
 	@Inject
 	public IdeaSyncTask() {
 		setGroup(Constants.TaskGroup.IDE);
-		getIdeaRunConfigs().set(getProject().provider(this::getRunConfigs));
+		getIdeaRunConfigs().set(getProject().provider(this::getDeferredRunConfigs));
 	}
 
 	@TaskAction
@@ -86,12 +89,17 @@ public abstract class IdeaSyncTask extends AbstractLoomTask {
 		}
 	}
 
-	private List<IntellijRunConfig> getRunConfigs() throws IOException {
-		return getRunConfigs(getProject(), getExtension().getRunConfigs());
+	private List<IntellijRunConfig> getDeferredRunConfigs() throws IOException {
+		final Project project = getProject();
+		return getRunConfigs(project, getExtension().getRunConfigs(), InstallerDataTaskConfiguration.getDescriptorContents(project));
 	}
 
 	@VisibleForTesting
 	public static List<IntellijRunConfig> getRunConfigs(Project project, Collection<? extends RunConfiguration> runs) throws IOException {
+		return getRunConfigs(project, runs, null);
+	}
+
+	private static List<IntellijRunConfig> getRunConfigs(Project project, Collection<? extends RunConfiguration> runs, Provider<String> installerDescriptor) throws IOException {
 		IsolatedProject rootProject = project.getIsolated().getRootProject();
 		String projectPath = project.getPath().equals(rootProject.getPath()) ? "" : project.getPath().replace(':', '_');
 		File runConfigsDir = new File(rootProject.getProjectDirectory().file(".idea").getAsFile(), "runConfigurations");
@@ -103,23 +111,40 @@ public abstract class IdeaSyncTask extends AbstractLoomTask {
 				continue;
 			}
 
-			RunConfiguration runConfiguration = DefaultRunConfigurationSettings.finialise(settings, project);
-			String name = RunConfigUtils.getDisplayName(runConfiguration, project).replaceAll("[^a-zA-Z0-9$_]", "_");
-			IntellijRunConfigWriter writer = createWriter(runConfiguration, project);
+			final boolean preferGradleTask = settings.getPreferGradleTask().get();
+			String name = RunConfigUtils.getDisplayName(settings, project).replaceAll("[^a-zA-Z0-9$_]", "_");
 
 			File runConfigFile = new File(runConfigsDir, name + projectPath + ".xml");
-			String runConfigXml = writer.render();
 
 			IntellijRunConfig irc = project.getObjects().newInstance(IntellijRunConfig.class);
-			irc.getRunConfigXml().set(runConfigXml);
-			irc.getRunConfigType().set(writer.getType());
 			irc.getLaunchFile().set(runConfigFile);
+
+			if (installerDescriptor != null && !preferGradleTask) {
+				irc.getRunConfigXml().set(installerDescriptor.map(ignored -> renderRunConfig(settings, project)));
+				irc.getRunConfigType().set(IntellijRunConfigWriter.APPLICATION_TYPE);
+			} else {
+				final RunConfiguration runConfiguration = preferGradleTask
+						? settings
+						: DefaultRunConfigurationSettings.finialise(settings, project);
+				final IntellijRunConfigWriter writer = createWriter(runConfiguration, project);
+				irc.getRunConfigXml().set(writer.render());
+				irc.getRunConfigType().set(writer.getType());
+			}
+
 			configs.add(irc);
 
 			RunConfigUtils.createRunDirectory(settings);
 		}
 
 		return configs;
+	}
+
+	private static String renderRunConfig(RunConfiguration settings, Project project) {
+		try {
+			return createWriter(DefaultRunConfigurationSettings.finialise(settings, project), project).render();
+		} catch (IOException e) {
+			throw new UncheckedIOException("Failed to render IntelliJ run configuration " + settings.getName(), e);
+		}
 	}
 
 	private static IntellijRunConfigWriter createWriter(RunConfiguration run, Project project) {

@@ -25,7 +25,7 @@
 package net.fabricmc.loom.api.fabricapi;
 
 import org.gradle.api.Action;
-import org.gradle.api.artifacts.Dependency;
+import org.gradle.api.provider.Provider;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -33,21 +33,21 @@ import org.jetbrains.annotations.ApiStatus;
  */
 public interface FabricApiExtension {
 	/**
-	 * Get a {@link Dependency} for a given Fabric API module.
+	 * Get the dependency notation for a given Fabric API module.
 	 *
 	 * @param moduleName The name of the module.
 	 * @param fabricApiVersion The main Fabric API version.
-	 * @return A {@link Dependency} for the module.
+	 * @return A lazy provider of dependency notation for the module.
 	 */
-	Dependency module(String moduleName, String fabricApiVersion);
+	Provider<String> module(String moduleName, String fabricApiVersion);
 
 	/**
 	 * Get the version of a Fabric API module.
 	 * @param moduleName The name of the module.
 	 * @param fabricApiVersion The main Fabric API version.
-	 * @return The version of the module.
+	 * @return A lazy provider of the version of the module.
 	 */
-	String moduleVersion(String moduleName, String fabricApiVersion);
+	Provider<String> moduleVersion(String moduleName, String fabricApiVersion);
 
 	/**
 	 * Configuration data generation using the default settings.

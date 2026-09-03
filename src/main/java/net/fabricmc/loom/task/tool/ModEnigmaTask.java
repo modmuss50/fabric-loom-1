@@ -71,6 +71,9 @@ public abstract class ModEnigmaTask extends AbstractLoomTask {
 	@Input
 	public abstract ListProperty<Path> getMinecraftJars();
 
+	@Classpath
+	protected abstract ConfigurableFileCollection getMinecraftJarFiles();
+
 	/**
 	 * The mapping file path. It must be a single Enigma-formatted file.
 	 */
@@ -93,6 +96,7 @@ public abstract class ModEnigmaTask extends AbstractLoomTask {
 
 	public ModEnigmaTask() {
 		getMinecraftJars().convention(getExtension().getProductionNamespaceEnum().map(getExtension()::getMinecraftJars));
+		getMinecraftJarFiles().from(getExtension().getProductionNamespaceEnum().map(getExtension()::getMinecraftJarsCollection));
 		getToolClasspath().from(getEnigmaClasspath(getProject()));
 	}
 

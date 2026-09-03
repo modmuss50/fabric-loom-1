@@ -24,6 +24,7 @@
 
 package net.fabricmc.loom.configuration.providers.minecraft;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -31,35 +32,30 @@ import java.util.List;
 
 import org.gradle.api.JavaVersion;
 import org.gradle.api.Project;
-import org.gradle.api.artifacts.Configuration;
-import org.gradle.api.artifacts.Dependency;
-import org.gradle.api.artifacts.ExternalModuleDependency;
-import org.gradle.api.artifacts.ModuleDependency;
+import org.gradle.api.artifacts.ArtifactRepositoryContainer;
+import org.gradle.api.file.ConfigurableFileCollection;
 import org.gradle.api.provider.Provider;
+import org.gradle.api.tasks.TaskProvider;
 
 import net.fabricmc.loom.LoomGradleExtension;
-import net.fabricmc.loom.configuration.providers.BundleMetadata;
-import net.fabricmc.loom.configuration.providers.minecraft.library.Library;
-import net.fabricmc.loom.configuration.providers.minecraft.library.LibraryContext;
 import net.fabricmc.loom.configuration.providers.minecraft.library.LibraryProcessorManager;
-import net.fabricmc.loom.configuration.providers.minecraft.library.MinecraftLibraryHelper;
 import net.fabricmc.loom.configuration.providers.minecraft.library.processors.RuntimeLog4jLibraryProcessor;
 import net.fabricmc.loom.configuration.providers.minecraft.library.processors.RuntimeLwjglGraphicsLibraryProcessor;
+import net.fabricmc.loom.task.DownloadMinecraftLibrariesTask;
 import net.fabricmc.loom.util.Constants;
+import net.fabricmc.loom.util.MirrorUtil;
 import net.fabricmc.loom.util.Platform;
 import net.fabricmc.loom.util.gradle.GradleUtils;
 
 public class MinecraftLibraryProvider {
-	private static final Platform platform = Platform.CURRENT;
+	private static final String DOWNLOAD_LIBRARIES_TASK = "downloadMinecraftLibraries";
 
 	private final Project project;
 	private final MinecraftProvider minecraftProvider;
-	private final LibraryProcessorManager processorManager;
 
 	public MinecraftLibraryProvider(MinecraftProvider minecraftProvider, Project project) {
 		this.project = project;
 		this.minecraftProvider = minecraftProvider;
-		this.processorManager = new LibraryProcessorManager(platform, project.getRepositories(), LoomGradleExtension.get(project).getLibraryProcessors().get(), getEnabledProcessors());
 	}
 
 	private List<String> getEnabledProcessors() {
@@ -88,61 +84,56 @@ public class MinecraftLibraryProvider {
 	public void provide() {
 		final LoomGradleExtension extension = LoomGradleExtension.get(project);
 		final MinecraftJarConfiguration jarConfiguration = extension.getMinecraftJarConfiguration().get();
-
 		final boolean provideClient = jarConfiguration.supportedEnvironments().contains("client");
 		final boolean provideServer = jarConfiguration.supportedEnvironments().contains("server");
 		assert provideClient || provideServer;
+		validateProcessorFactories(extension);
+
+		if (extension.isCollectingDependencyVerificationMetadata()) {
+			throw new UnsupportedOperationException("Dependency verification metadata generation is not yet supported by task-backed Minecraft libraries");
+		}
+
+		final Path output = minecraftProvider.path("libraries");
+		final TaskProvider<DownloadMinecraftLibrariesTask> task = registerTask(extension, output, provideClient, provideServer);
+		project.getTasks().named(TaskBasedMinecraftConfiguration.PROCESS_MINECRAFT_JARS_TASK).configure(aggregate -> aggregate.dependsOn(task));
 
 		if (provideClient) {
-			provideClientLibraries();
+			addFiles(Constants.Configurations.MINECRAFT_CLIENT_COMPILE_LIBRARIES, task,
+					output.resolve(DownloadMinecraftLibrariesTask.COMMON_COMPILE_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.CLIENT_COMPILE_DIRECTORY));
+			addFiles(Constants.Configurations.MINECRAFT_CLIENT_RUNTIME_LIBRARIES, task,
+					output.resolve(DownloadMinecraftLibrariesTask.COMMON_RUNTIME_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.CLIENT_RUNTIME_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.LEGACY_CLIENT_RUNTIME_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.COMMON_RUNTIME_NATIVES_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.CLIENT_RUNTIME_NATIVES_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.LEGACY_CLIENT_RUNTIME_NATIVES_DIRECTORY));
+			addFiles(Constants.Configurations.MINECRAFT_NATIVES, task,
+					output.resolve(DownloadMinecraftLibrariesTask.NATIVES_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.COMMON_RUNTIME_NATIVES_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.CLIENT_RUNTIME_NATIVES_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.LEGACY_CLIENT_RUNTIME_NATIVES_DIRECTORY));
 		}
 
 		if (provideServer) {
-			provideServerLibraries();
+			addFiles(Constants.Configurations.MINECRAFT_SERVER_COMPILE_LIBRARIES, task,
+					output.resolve(DownloadMinecraftLibrariesTask.COMMON_COMPILE_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.SERVER_COMPILE_DIRECTORY));
+			addFiles(Constants.Configurations.MINECRAFT_SERVER_RUNTIME_LIBRARIES, task,
+					output.resolve(DownloadMinecraftLibrariesTask.COMMON_RUNTIME_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.SERVER_RUNTIME_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.COMMON_RUNTIME_NATIVES_DIRECTORY),
+					output.resolve(DownloadMinecraftLibrariesTask.SERVER_RUNTIME_NATIVES_DIRECTORY));
 		}
 
-		if (extension.isCollectingDependencyVerificationMetadata()) {
-			resolveAllLibraries();
+		final String localMods = extension.disableObfuscation() ? Constants.Configurations.LOCAL_RUNTIME : "modLocalRuntime";
+		addFiles(localMods, task, output.resolve(DownloadMinecraftLibrariesTask.LOCAL_MODS_DIRECTORY));
+	}
+
+	private void validateProcessorFactories(LoomGradleExtension extension) {
+		if (!extension.getLibraryProcessors().get().equals(LibraryProcessorManager.DEFAULT_LIBRARY_PROCESSORS)) {
+			throw new UnsupportedOperationException("Custom Minecraft library processor factories are not yet supported by task-backed Minecraft libraries");
 		}
-	}
-
-	private void provideClientLibraries() {
-		final List<Library> libraries = MinecraftLibraryHelper.getLibrariesForPlatform(minecraftProvider.getVersionInfo(), platform);
-		final List<Library> processLibraries = processLibraries(libraries);
-		processLibraries.forEach(this::applyClientLibrary);
-
-		// After Minecraft 1.19-pre1 the natives should be on the runtime classpath.
-		if (!minecraftProvider.getVersionInfo().hasNativesToExtract()) {
-			project.getConfigurations().named(Constants.Configurations.MINECRAFT_RUNTIME_LIBRARIES, configuration -> configuration.extendsFrom(project.getConfigurations().named(Constants.Configurations.MINECRAFT_NATIVES)));
-		}
-	}
-
-	private void provideServerLibraries() {
-		final BundleMetadata serverBundleMetadata = minecraftProvider.getServerBundleMetadata();
-		final List<Library> libraries = serverBundleMetadata != null ? MinecraftLibraryHelper.getServerLibraries(serverBundleMetadata) : Collections.emptyList();
-		final List<Library> processLibraries = processLibraries(libraries);
-		processLibraries.forEach(this::applyServerLibrary);
-	}
-
-	/**
-	 * When Gradle is writing dependency verification metadata, we need to resolve all libraries across all platforms,
-	 * to ensure that they are captured.
-	 */
-	private void resolveAllLibraries() {
-		project.getLogger().info("Resolving all libraries for dependency verification metadata generation");
-
-		final List<Library> libraries = MinecraftLibraryHelper.getAllLibraries(minecraftProvider.getVersionInfo());
-		Configuration detachedConfiguration = project.getConfigurations().detachedConfiguration(
-				libraries.stream()
-					.map(library -> project.getDependencies().create(library.mavenNotation()))
-					.toArray(Dependency[]::new)
-		);
-		detachedConfiguration.getFiles();
-	}
-
-	private List<Library> processLibraries(List<Library> libraries) {
-		final LibraryContext libraryContext = new LibraryContext(minecraftProvider.getVersionInfo(), getTargetRuntimeJavaVersion());
-		return processorManager.processLibraries(libraries, libraryContext);
 	}
 
 	private JavaVersion getTargetRuntimeJavaVersion() {
@@ -158,43 +149,69 @@ public class MinecraftLibraryProvider {
 		return JavaVersion.current();
 	}
 
-	private void applyClientLibrary(Library library) {
-		switch (library.target()) {
-		case COMPILE -> addLibrary(Constants.Configurations.MINECRAFT_CLIENT_COMPILE_LIBRARIES, library);
-		case RUNTIME -> addLibrary(Constants.Configurations.MINECRAFT_CLIENT_RUNTIME_LIBRARIES, library);
-		case NATIVES -> addLibrary(Constants.Configurations.MINECRAFT_NATIVES, library);
-		case LOCAL_MOD -> applyLocalModLibrary(library);
+	private TaskProvider<DownloadMinecraftLibrariesTask> registerTask(LoomGradleExtension extension, Path output, boolean provideClient, boolean provideServer) {
+		final Platform platform = Platform.CURRENT;
+		final Path artifactCache = output.resolveSibling("library-artifacts");
+		final TaskProvider<DownloadMinecraftLibrariesTask> task = project.getTasks().register(DOWNLOAD_LIBRARIES_TASK, DownloadMinecraftLibrariesTask.class, downloadTask -> {
+			downloadTask.setDescription("Downloads and prepares the Minecraft libraries.");
+			downloadTask.setGroup(Constants.TaskGroup.FABRIC);
+			downloadTask.getMinecraftMetadata().fileValue(minecraftProvider.getMinecraftMetadataPath().toFile());
+			downloadTask.getProvideClient().set(provideClient);
+			downloadTask.getProvideServer().set(provideServer);
+
+			if (provideServer) {
+				downloadTask.getMinecraftServerJar().fileValue(minecraftProvider.getMinecraftServerJar());
+			}
+
+			downloadTask.getRuntimeJavaVersion().set(Integer.parseInt(getTargetRuntimeJavaVersion().getMajorVersion()));
+			downloadTask.getOperatingSystem().set(platform.getOperatingSystem());
+			downloadTask.getArchitecture64Bit().set(platform.getArchitecture().is64Bit());
+			downloadTask.getArchitectureArm().set(platform.getArchitecture().isArm());
+			downloadTask.getArchitectureRiscV().set(platform.getArchitecture().isRiscV());
+			downloadTask.getEnabledProcessors().set(getEnabledProcessors());
+			downloadTask.getRepositoryUrls().set(List.of(
+					MirrorUtil.getLibrariesBase(project),
+					String.valueOf(ArtifactRepositoryContainer.MAVEN_CENTRAL_URL),
+					MirrorUtil.getFabricRepository(project)
+			));
+			downloadTask.getOffline().set(project.getGradle().getStartParameter().isOffline());
+			downloadTask.getRefresh().set(extension.refreshDeps());
+			downloadTask.getOutputDirectory().set(output.toFile());
+			downloadTask.getArtifactCacheDirectory().set(artifactCache.toFile());
+		});
+
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(project);
+		taskGraph.dependsOn(task, minecraftProvider.getMinecraftMetadataPath());
+
+		if (provideServer) {
+			taskGraph.dependsOn(task, minecraftProvider.getMinecraftServerJar().toPath());
 		}
+
+		taskGraph.registerOutput(output, task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.COMMON_COMPILE_DIRECTORY), task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.CLIENT_COMPILE_DIRECTORY), task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.CLIENT_RUNTIME_DIRECTORY), task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.SERVER_COMPILE_DIRECTORY), task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.COMMON_RUNTIME_DIRECTORY), task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.SERVER_RUNTIME_DIRECTORY), task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.LEGACY_CLIENT_RUNTIME_DIRECTORY), task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.COMMON_RUNTIME_NATIVES_DIRECTORY), task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.CLIENT_RUNTIME_NATIVES_DIRECTORY), task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.SERVER_RUNTIME_NATIVES_DIRECTORY), task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.LEGACY_CLIENT_RUNTIME_NATIVES_DIRECTORY), task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.NATIVES_DIRECTORY), task);
+		taskGraph.registerOutput(output.resolve(DownloadMinecraftLibrariesTask.LOCAL_MODS_DIRECTORY), task);
+		return task;
 	}
 
-	private void applyServerLibrary(Library library) {
-		switch (library.target()) {
-		case COMPILE -> addLibrary(Constants.Configurations.MINECRAFT_SERVER_COMPILE_LIBRARIES, library);
-		case RUNTIME -> addLibrary(Constants.Configurations.MINECRAFT_SERVER_RUNTIME_LIBRARIES, library);
-		case LOCAL_MOD -> applyLocalModLibrary(library);
-		default -> throw new IllegalStateException("Target not supported for server library: %s".formatted(library));
+	private void addFiles(String configuration, TaskProvider<DownloadMinecraftLibrariesTask> task, Path... directories) {
+		final ConfigurableFileCollection files = project.files();
+
+		for (Path directory : directories) {
+			files.from(project.fileTree(directory.toFile(), tree -> tree.include("**/*.jar")));
 		}
-	}
 
-	private void applyLocalModLibrary(Library library) {
-		ExternalModuleDependency dependency = (ExternalModuleDependency) project.getDependencies().create(library.mavenNotation());
-		dependency.setTransitive(false);
-
-		String configuration = LoomGradleExtension.get(project).disableObfuscation() ? Constants.Configurations.LOCAL_RUNTIME : "modLocalRuntime";
-		project.getDependencies().add(configuration, dependency);
-	}
-
-	private void addLibrary(String configuration, Library library) {
-		addDependency(configuration, library.mavenNotation());
-	}
-
-	private void addDependency(String configuration, Object dependency) {
-		final Dependency created = project.getDependencies().add(configuration, dependency);
-
-		// The launcher doesn't download transitive deps, so neither will we.
-		// This will also prevent a LaunchWrapper library dependency from pulling in outdated ASM jars.
-		if (created instanceof ModuleDependency md) {
-			md.setTransitive(false);
-		}
+		files.builtBy(task);
+		project.getDependencies().add(configuration, files);
 	}
 }

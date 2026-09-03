@@ -63,7 +63,7 @@ public interface FabricModJsonSource {
 			return Files.readAllBytes(findFile(path).toPath());
 		}
 
-		private File findFile(String path) throws IOException {
+		public File findFile(String path) throws IOException {
 			final File file = SourceSetHelper.findFirstFileInResource(path, project, sourceSets);
 
 			if (file == null) {

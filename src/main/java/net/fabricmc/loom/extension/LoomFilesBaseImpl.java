@@ -39,20 +39,14 @@ public abstract class LoomFilesBaseImpl implements LoomFiles {
 
 	public LoomFilesBaseImpl() { }
 
-	private static File createFile(File parent, String child) {
-		File file = new File(parent, child);
-		file.mkdirs();
-		return file;
-	}
-
 	@Override
 	public File getUserCache() {
-		return createFile(getGradleUserHomeDir(), "caches" + File.separator + "fabric-loom");
+		return new File(getGradleUserHomeDir(), "caches" + File.separator + "fabric-loom");
 	}
 
 	@Override
 	public File getRootProjectPersistentCache() {
-		return createFile(getProjectCacheDir(), "loom-cache");
+		return new File(getProjectCacheDir(), "loom-cache");
 	}
 
 	@Override
@@ -63,22 +57,22 @@ public abstract class LoomFilesBaseImpl implements LoomFiles {
 			return getRootProjectPersistentCache();
 		}
 
-		return createFile(getProjectCacheDir(), "loom-cache" + File.separator + "projects" + File.separator + normalizedPath);
+		return new File(getProjectCacheDir(), "loom-cache" + File.separator + "projects" + File.separator + normalizedPath);
 	}
 
 	@Override
 	public File getProjectBuildCache() {
-		return createFile(getBuildDir(), "loom-cache");
+		return new File(getBuildDir(), "loom-cache");
 	}
 
 	@Override
 	public File getRemappedModCache() {
-		return createFile(getRootProjectPersistentCache(), "remapped_mods");
+		return new File(getRootProjectPersistentCache(), "remapped_mods");
 	}
 
 	@Override
 	public File getNativesDirectory(Project project) {
-		return createFile(getRootProjectPersistentCache(), "natives/" + LoomGradleExtension.get(project).getMinecraftProvider().minecraftVersion());
+		return new File(getRootProjectPersistentCache(), "natives/" + LoomGradleExtension.get(project).getMinecraftProvider().minecraftVersion());
 	}
 
 	@Override

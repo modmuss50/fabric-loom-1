@@ -37,7 +37,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.Collection;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -53,10 +52,13 @@ import org.gradle.api.provider.Property;
 import org.gradle.api.services.ServiceReference;
 import org.gradle.api.tasks.Classpath;
 import org.gradle.api.tasks.Input;
+import org.gradle.api.tasks.InputFile;
 import org.gradle.api.tasks.Internal;
 import org.gradle.api.tasks.Nested;
 import org.gradle.api.tasks.Optional;
 import org.gradle.api.tasks.OutputFile;
+import org.gradle.api.tasks.PathSensitive;
+import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
 import org.gradle.api.tasks.options.Option;
 import org.gradle.internal.logging.progress.ProgressLoggerFactory;
@@ -75,7 +77,6 @@ import net.fabricmc.loom.api.decompilers.DecompilerOptions;
 import net.fabricmc.loom.api.decompilers.LoomDecompiler;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJar;
-import net.fabricmc.loom.configuration.providers.minecraft.mapped.AbstractMappedMinecraftProvider;
 import net.fabricmc.loom.decompilers.ClassLineNumbers;
 import net.fabricmc.loom.decompilers.LineNumberRemapper;
 import net.fabricmc.loom.decompilers.cache.CachedData;
@@ -112,8 +113,15 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 	@Input
 	public abstract Property<String> getInputJarName();
 
-	@Classpath
-	protected abstract RegularFileProperty getClassesInputJar();
+	@InputFile
+	@PathSensitive(PathSensitivity.NONE)
+	@ApiStatus.Internal
+	public abstract RegularFileProperty getClassesInputJar();
+
+	@InputFile
+	@PathSensitive(PathSensitivity.NONE)
+	@ApiStatus.Internal
+	public abstract RegularFileProperty getLineNumberInputJar();
 
 	@Classpath
 	protected abstract ConfigurableFileCollection getClasspath();
@@ -126,7 +134,16 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 
 	// Contains the remapped linenumbers
 	@OutputFile
-	protected abstract RegularFileProperty getClassesOutputJar();
+	@ApiStatus.Internal
+	public abstract RegularFileProperty getClassesOutputJar();
+
+	@OutputFile
+	@ApiStatus.Internal
+	public abstract RegularFileProperty getClassesOutputJarInputHash();
+
+	@OutputFile
+	@ApiStatus.Internal
+	public abstract RegularFileProperty getLineMapOutputFile();
 
 	@Input
 	@Option(option = "use-cache", description = "Use the decompile cache")
@@ -188,35 +205,6 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 	public GenerateSourcesTask(DecompilerOptions decompilerOptions) {
 		this.decompilerOptions = decompilerOptions;
 
-		getClassesInputJar().fileProvider(getInputJarName().map(minecraftJarName -> {
-			final List<MinecraftJar> minecraftJars = getExtension().getNamedMinecraftProvider().getMinecraftJars();
-
-			for (MinecraftJar minecraftJar : minecraftJars) {
-				if (minecraftJar.getName().equals(minecraftJarName)) {
-					final Path backupJarPath = AbstractMappedMinecraftProvider.getBackupJarPath(minecraftJar);
-
-					if (Files.notExists(backupJarPath)) {
-						throw new IllegalStateException("Input minecraft jar not found at: " + backupJarPath);
-					}
-
-					return backupJarPath.toFile();
-				}
-			}
-
-			throw new IllegalStateException("Input minecraft jar not found: " + getInputJarName().get());
-		}));
-		getClassesOutputJar().fileProvider(getInputJarName().map(minecraftJarName -> {
-			final List<MinecraftJar> minecraftJars = getExtension().getNamedMinecraftProvider().getMinecraftJars();
-
-			for (MinecraftJar minecraftJar : minecraftJars) {
-				if (minecraftJar.getName().equals(minecraftJarName)) {
-					return minecraftJar.toFile();
-				}
-			}
-
-			throw new IllegalStateException("Input minecraft jar not found: " + getInputJarName().get());
-		}));
-
 		getClasspath().from(decompilerOptions.getClasspath()).finalizeValueOnRead();
 		dependsOn(decompilerOptions.getClasspath().getBuiltBy());
 
@@ -226,7 +214,7 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 		getUseCache().convention(true);
 		getResetCache().convention(getExtension().refreshDeps());
 
-		getMappings().set(SourceMappingsService.create(getProject()));
+		getMappings().set(SourceMappingsService.create(this));
 
 		getUnpickOptions().set(UnpickService.createOptions(this));
 
@@ -246,6 +234,7 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 
 	@TaskAction
 	public void run() throws IOException {
+		invalidateLineMappedOutput();
 		final Platform platform = Platform.CURRENT;
 
 		if (!platform.getArchitecture().is64Bit()) {
@@ -300,6 +289,7 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 
 	private void runWithCache(ServiceFactory serviceFactory, Path cacheRoot) throws IOException {
 		final Path classesInputJar = getClassesInputJar().get().getAsFile().toPath();
+		final Path lineNumberInputJar = getLineNumberInputJar().get().getAsFile().toPath();
 		final Path sourcesOutputJar = getSourcesOutputJar().get().getAsFile().toPath();
 		final Path classesOutputJar = getClassesOutputJar().get().getAsFile().toPath();
 		final var cacheRules = new CachedFileStoreImpl.CacheRules(getMaxCachedFiles().get(), Duration.ofDays(getMaxCacheFileAge().get()));
@@ -357,7 +347,7 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 		final ClassLineNumbers existingLinenumbers = workRequest.lineNumbers();
 		final ClassLineNumbers lineNumbers = ClassLineNumbers.merge(existingLinenumbers, outputLineNumbers);
 
-		applyLineNumbers(lineNumbers, classesInputJar, classesOutputJar);
+		applyLineNumbers(lineNumbers, lineNumberInputJar, classesOutputJar);
 
 		try (var timer = new Timer("Prune cache")) {
 			decompileCache.prune();
@@ -366,6 +356,7 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 
 	private void runWithoutCache(ServiceFactory serviceFactory) throws IOException {
 		final Path classesInputJar = getClassesInputJar().get().getAsFile().toPath();
+		final Path lineNumberInputJar = getLineNumberInputJar().get().getAsFile().toPath();
 		final Path sourcesOutputJar = getSourcesOutputJar().get().getAsFile().toPath();
 		final Path classesOutputJar = getClassesOutputJar().get().getAsFile().toPath();
 
@@ -390,23 +381,36 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 
 		getLogger().info("Decompiled sources written to {}", sourcesOutputJar);
 
-		applyLineNumbers(lineNumbers, classesInputJar, classesOutputJar);
+		applyLineNumbers(lineNumbers, lineNumberInputJar, classesOutputJar);
 	}
 
 	private void applyLineNumbers(@Nullable ClassLineNumbers lineNumbers, Path classesInputJar, Path classesOutputJar) throws IOException {
-		if (lineNumbers == null) {
-			getLogger().info("No line numbers to remap, skipping remapping");
-			return;
+		final Path lineMapOutput = getLineMapOutputFile().get().getAsFile().toPath();
+		Files.createDirectories(lineMapOutput.getParent());
+
+		try (BufferedWriter writer = Files.newBufferedWriter(lineMapOutput, StandardCharsets.UTF_8)) {
+			if (lineNumbers != null) {
+				lineNumbers.write(writer);
+			}
 		}
 
-		final Path tempJar = Files.createTempFile("loom", "linenumber-remap.jar");
-		Files.delete(tempJar);
+		final WorkQueue workQueue = getWorkerExecutor().noIsolation();
+		workQueue.submit(LineNumberRemapAction.class, parameters -> {
+			parameters.getInputJar().fileValue(classesInputJar.toFile());
+			parameters.getLineMapFile().set(getLineMapOutputFile());
+			parameters.getOutputJar().fileValue(classesOutputJar.toFile());
+			parameters.getInputHashFile().set(getClassesOutputJarInputHash());
+		});
+		workQueue.await();
+	}
 
-		try (var timer = new Timer("Remap line numbers")) {
-			remapLineNumbers(lineNumbers, classesInputJar, tempJar);
-		}
-
-		Files.move(tempJar, classesOutputJar, StandardCopyOption.REPLACE_EXISTING);
+	private void invalidateLineMappedOutput() {
+		final WorkQueue workQueue = getWorkerExecutor().noIsolation();
+		workQueue.submit(InvalidateLineMappedOutputAction.class, parameters -> {
+			parameters.getOutputJar().set(getClassesOutputJar());
+			parameters.getInputHashFile().set(getClassesOutputJarInputHash());
+		});
+		workQueue.await();
 	}
 
 	private String getCacheKey(ServiceFactory serviceFactory) {
@@ -469,20 +473,6 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 		}
 
 		return readLineNumbers(lineMapFile);
-	}
-
-	private void remapLineNumbers(ClassLineNumbers lineNumbers, Path inputJar, Path outputJar) throws IOException {
-		Objects.requireNonNull(lineNumbers, "lineNumbers");
-		final var remapper = new LineNumberRemapper(lineNumbers);
-		remapper.process(inputJar, outputJar);
-
-		final Path lineMap = inputJar.resolveSibling(inputJar.getFileName() + ".linemap.txt");
-
-		try (BufferedWriter writer = Files.newBufferedWriter(lineMap)) {
-			lineNumbers.write(writer);
-		}
-
-		getLogger().info("Wrote linemap to {}", lineMap);
 	}
 
 	private void doWork(@Nullable IPCServer ipcServer, Path inputJar, Path outputJar, Path linemapFile, @Nullable Path existingClasses) {
@@ -633,6 +623,66 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 
 		private Collection<Path> getLibraries() {
 			return getParameters().getClassPath().getFiles().stream().map(File::toPath).collect(Collectors.toSet());
+		}
+	}
+
+	public interface LineNumberRemapParameters extends WorkParameters {
+		RegularFileProperty getInputJar();
+		RegularFileProperty getLineMapFile();
+		RegularFileProperty getOutputJar();
+		RegularFileProperty getInputHashFile();
+	}
+
+	public abstract static class LineNumberRemapAction implements WorkAction<LineNumberRemapParameters> {
+		@Override
+		public void execute() {
+			final Path inputJar = getParameters().getInputJar().get().getAsFile().toPath();
+			final Path lineMapFile = getParameters().getLineMapFile().get().getAsFile().toPath();
+			final Path outputJar = getParameters().getOutputJar().get().getAsFile().toPath();
+			final Path inputHashFile = getParameters().getInputHashFile().get().getAsFile().toPath();
+
+			try {
+				Files.createDirectories(outputJar.getParent());
+				Files.deleteIfExists(outputJar);
+				Files.deleteIfExists(inputHashFile);
+
+				if (Files.size(lineMapFile) == 0) {
+					Files.copy(inputJar, outputJar, StandardCopyOption.REPLACE_EXISTING);
+				} else {
+					try (BufferedReader reader = Files.newBufferedReader(lineMapFile, StandardCharsets.UTF_8)) {
+						final ClassLineNumbers lineNumbers = ClassLineNumbers.readMappings(reader);
+						new LineNumberRemapper(lineNumbers).process(inputJar, outputJar);
+					}
+				}
+
+				Files.writeString(inputHashFile, Checksum.of(inputJar).sha256().hex(), StandardCharsets.UTF_8);
+			} catch (Exception e) {
+				try {
+					Files.deleteIfExists(outputJar);
+					Files.deleteIfExists(inputHashFile);
+				} catch (IOException cleanupException) {
+					e.addSuppressed(cleanupException);
+				}
+
+				throw new RuntimeException("Failed to remap Minecraft line numbers", e);
+			}
+		}
+	}
+
+	public interface InvalidateLineMappedOutputParameters extends WorkParameters {
+		RegularFileProperty getOutputJar();
+		RegularFileProperty getInputHashFile();
+	}
+
+	public abstract static class InvalidateLineMappedOutputAction implements WorkAction<InvalidateLineMappedOutputParameters> {
+		@Override
+		public void execute() {
+			try {
+				Files.deleteIfExists(getParameters().getOutputJar().get().getAsFile().toPath());
+				Files.deleteIfExists(getParameters().getInputHashFile().get().getAsFile().toPath());
+			} catch (IOException e) {
+				throw new UncheckedIOException("Failed to invalidate line-mapped Minecraft output", e);
+			}
 		}
 	}
 

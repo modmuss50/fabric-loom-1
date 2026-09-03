@@ -31,15 +31,21 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 
 import org.gradle.api.Project;
+import org.gradle.api.artifacts.ArtifactRepositoryContainer;
+import org.gradle.api.artifacts.repositories.MavenArtifactRepository;
+import org.gradle.api.plugins.JavaPlugin;
 import org.gradle.api.provider.Provider;
+import org.gradle.api.tasks.TaskProvider;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.api.decompilers.JavadocStyle;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.configuration.DependencyInfo;
@@ -48,8 +54,10 @@ import net.fabricmc.loom.configuration.providers.mappings.extras.annotations.Ann
 import net.fabricmc.loom.configuration.providers.mappings.tiny.TinyJarInfo;
 import net.fabricmc.loom.configuration.providers.mappings.unpick.UnpickMetadata;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftTaskGraph;
 import net.fabricmc.loom.util.Constants;
 import net.fabricmc.loom.util.FileSystemUtil;
+import net.fabricmc.loom.util.MirrorUtil;
 import net.fabricmc.loom.util.service.ServiceFactory;
 
 public abstract sealed class MappingConfiguration permits RemapMappingConfiguration, NoRemapMappingConfiguration {
@@ -65,6 +73,8 @@ public abstract sealed class MappingConfiguration permits RemapMappingConfigurat
 	private List<AnnotationsData> annotationsData = List.of();
 	@Nullable
 	private UnpickMetadata unpickMetadata;
+	@Nullable
+	private UnpickTaskConfiguration unpickTaskConfiguration;
 
 	protected MappingConfiguration(String mappingsIdentifier, Path inputJar) {
 		this.mappingsIdentifier = mappingsIdentifier;
@@ -96,7 +106,8 @@ public abstract sealed class MappingConfiguration permits RemapMappingConfigurat
 	protected void cleanup() throws IOException {
 	}
 
-	protected abstract void setupMappings(Project project, MinecraftProvider minecraftProvider, FileSystem inputJar) throws IOException;
+	protected void setupMappings(Project project, MinecraftProvider minecraftProvider, FileSystem inputJar) throws IOException {
+	}
 
 	public abstract Provider<TinyMappingsService.Options> getMappingsServiceOptions(Project project);
 
@@ -111,6 +122,13 @@ public abstract sealed class MappingConfiguration permits RemapMappingConfigurat
 	}
 
 	public void applyToProject(Project project, DependencyInfo dependency) {
+		final MinecraftTaskGraph taskGraph = MinecraftTaskGraph.get(project);
+
+		if (taskGraph.hasProducer(inputJar)) {
+			unpickTaskConfiguration = registerUnpickTask(project, dependency, taskGraph);
+			return;
+		}
+
 		if (unpickMetadata != null && unpickMetadata.hasConstants()) {
 			String notation = switch (unpickMetadata) {
 			case UnpickMetadata.V1 v1 -> String.format("%s:%s:%s:constants",
@@ -123,6 +141,66 @@ public abstract sealed class MappingConfiguration permits RemapMappingConfigurat
 
 			project.getDependencies().add(Constants.Configurations.MAPPING_CONSTANTS, notation);
 		}
+	}
+
+	private UnpickTaskConfiguration registerUnpickTask(Project project, DependencyInfo dependency, MinecraftTaskGraph taskGraph) {
+		final LoomGradleExtension extension = LoomGradleExtension.get(project);
+		final Path outputDirectory = extension.getFiles().getProjectPersistentCache().toPath()
+				.resolve("unpick")
+				.resolve(mappingsIdentifier)
+				.resolve("inputs");
+		final Path definitions = outputDirectory.resolve("definitions.unpick");
+		final Path metadata = outputDirectory.resolve("unpick.json");
+		final Path constants = outputDirectory.resolve("constants.jar");
+		final Path artifactCache = outputDirectory.resolve("artifacts");
+		final Provider<String> legacyConstantsNotation = getLegacyConstantsNotation(project, dependency);
+		final TaskProvider<PrepareMinecraftUnpickTask> task = project.getTasks().register("prepareMinecraftUnpick", PrepareMinecraftUnpickTask.class, prepareTask -> {
+			prepareTask.setDescription("Prepares unpick data from the configured Minecraft mappings.");
+			prepareTask.setGroup(Constants.TaskGroup.FABRIC);
+			prepareTask.getMappingsExtrasJar().fileValue(inputJar.toFile());
+
+			if (legacyConstantsNotation != null) {
+				prepareTask.getLegacyConstantsNotation().set(legacyConstantsNotation);
+			}
+
+			prepareTask.getRepositoryUrls().set(getMavenRepositoryUrls(project));
+			prepareTask.getOffline().set(project.getGradle().getStartParameter().isOffline());
+			prepareTask.getRefresh().set(extension.refreshDeps());
+			prepareTask.getDeclaredConstants().from(project.getConfigurations().named(Constants.Configurations.MAPPING_CONSTANTS));
+			prepareTask.getDefinitions().fileValue(definitions.toFile());
+			prepareTask.getMetadata().fileValue(metadata.toFile());
+			prepareTask.getConstantsJar().fileValue(constants.toFile());
+			prepareTask.getArtifactCacheDirectory().set(artifactCache.toFile());
+		});
+		taskGraph.dependsOn(task, inputJar);
+		taskGraph.registerOutput(definitions, task);
+		taskGraph.registerOutput(metadata, task);
+		taskGraph.registerOutput(constants, task);
+		final var constantsFiles = project.files(task.flatMap(PrepareMinecraftUnpickTask::getConstantsJar));
+		constantsFiles.builtBy(task);
+		project.getDependencies().add(JavaPlugin.COMPILE_ONLY_CONFIGURATION_NAME, constantsFiles);
+		return new UnpickTaskConfiguration(task);
+	}
+
+	private static List<String> getMavenRepositoryUrls(Project project) {
+		final var urls = new LinkedHashSet<String>();
+		project.getRepositories().withType(MavenArtifactRepository.class)
+				.forEach(repository -> urls.add(repository.getUrl().toString()));
+		urls.add(MirrorUtil.getFabricRepository(project));
+		urls.add(String.valueOf(ArtifactRepositoryContainer.MAVEN_CENTRAL_URL));
+		urls.add(MirrorUtil.getLibrariesBase(project));
+		return List.copyOf(urls);
+	}
+
+	private static @Nullable Provider<String> getLegacyConstantsNotation(Project project, DependencyInfo dependency) {
+		final String group = dependency.getDependency().getGroup();
+		final String name = dependency.getDependency().getName();
+
+		if (group == null || name == null || dependency.getDependency().getVersion() == null) {
+			return null;
+		}
+
+		return project.provider(() -> "%s:%s:%s:constants".formatted(group, name, dependency.getResolvedVersion()));
 	}
 
 	protected static Path resolveInputJar(DependencyInfo dependency, String displayName) {
@@ -190,6 +268,10 @@ public abstract sealed class MappingConfiguration permits RemapMappingConfigurat
 		return inputJar;
 	}
 
+	public final Path getInputJar() {
+		return inputJar;
+	}
+
 	public String mappingsIdentifier() {
 		return mappingsIdentifier;
 	}
@@ -208,5 +290,12 @@ public abstract sealed class MappingConfiguration permits RemapMappingConfigurat
 
 	public UnpickMetadata getUnpickMetadata() {
 		return Objects.requireNonNull(unpickMetadata, "Unpick metadata is not available");
+	}
+
+	public @Nullable UnpickTaskConfiguration getUnpickTaskConfiguration() {
+		return unpickTaskConfiguration;
+	}
+
+	public record UnpickTaskConfiguration(TaskProvider<PrepareMinecraftUnpickTask> task) {
 	}
 }

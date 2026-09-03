@@ -122,10 +122,14 @@ class AnnotationsTest extends Specification implements GradleProjectTestTrait {
 		"""
 
 		when:
-		def result = gradle.run(task: "compileJava")
+		def result = gradle.run(tasks: [
+			"compileJava",
+			"compileClientJava"
+		])
 
 		then:
 		result.task(":compileJava").outcome == NO_SOURCE
+		result.task(":compileClientJava").outcome == NO_SOURCE
 		hasClassAnnotation(gradle.getGeneratedMinecraft(minecraftArtifactVersion, "clientonly-deobf"), "net/minecraft/client/Options.class", "Ltest/AnnotationPatchApplied;")
 		hasClassAnnotation(gradle.getGeneratedMinecraft(minecraftArtifactVersion, "common-deobf"), "net/minecraft/resources/Identifier.class", "Ltest/AnnotationPatchApplied;")
 	}

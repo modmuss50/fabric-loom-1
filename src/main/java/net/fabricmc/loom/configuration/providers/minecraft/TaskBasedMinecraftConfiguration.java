@@ -39,8 +39,6 @@ import org.jetbrains.annotations.ApiStatus;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.util.Checksum;
-import net.fabricmc.loom.util.Constants;
-import net.fabricmc.loom.util.gradle.GradleUtils;
 
 @ApiStatus.Internal
 public final class TaskBasedMinecraftConfiguration {
@@ -53,10 +51,6 @@ public final class TaskBasedMinecraftConfiguration {
 	private static final Set<String> IDE_TASKS = Set.of("eclipse", "eclipseClasspath", "genEclipseRuns", "vscode");
 
 	private TaskBasedMinecraftConfiguration() {
-	}
-
-	public static boolean isEnabled(Project project) {
-		return GradleUtils.getBooleanProperty(project, Constants.Properties.TASK_BASED_MINECRAFT);
 	}
 
 	public static String getProcessTaskName(MinecraftJar.Type type) {
@@ -75,19 +69,41 @@ public final class TaskBasedMinecraftConfiguration {
 
 	public static Path getOutputPath(Project project, MinecraftJar inputJar) {
 		final String projectHash = Checksum.of(project).sha1().hex();
-		// Mapped input paths include the Minecraft and mappings identities, plus the processor hash when applicable.
-		final String inputJarIdentity = Checksum.of(inputJar.getPath().toAbsolutePath().normalize().toString()).sha1().hex();
 
 		return LoomGradleExtension.get(project).getFiles().getUserCache().toPath()
 				.resolve("taskBasedMinecraft")
 				.resolve(projectHash)
-				.resolve(inputJarIdentity)
+				.resolve(getInputJarIdentity(inputJar))
 				.resolve(inputJar.getType().toString())
 				.resolve("minecraft-%s.jar".formatted(inputJar.getType()));
 	}
 
+	public static Path getLineMappedPath(Project project, MinecraftJar inputJar) {
+		return LoomGradleExtension.get(project).getFiles().getProjectPersistentCache().toPath()
+				.resolve("taskBasedMinecraft")
+				.resolve("generatedSources")
+				.resolve(getInputJarIdentity(inputJar))
+				.resolve(inputJar.getType().toString())
+				.resolve("minecraft-%s-line-mapped.jar".formatted(inputJar.getType()));
+	}
+
+	public static Path getLineMapPath(Project project, MinecraftJar inputJar) {
+		final Path lineMappedJar = getLineMappedPath(project, inputJar);
+		return lineMappedJar.resolveSibling(lineMappedJar.getFileName() + ".linemap.txt");
+	}
+
+	public static Path getLineMappedInputHashPath(Project project, MinecraftJar inputJar) {
+		final Path lineMappedJar = getLineMappedPath(project, inputJar);
+		return lineMappedJar.resolveSibling(lineMappedJar.getFileName() + ".input.sha256");
+	}
+
 	public static Path getSourcesPath(Project project, MinecraftJar inputJar) {
 		return getSourcesPath(getOutputPath(project, inputJar));
+	}
+
+	public static Path getSourcesWorkPath(Project project, MinecraftJar inputJar) {
+		final Path lineMappedJar = getLineMappedPath(project, inputJar);
+		return lineMappedJar.resolveSibling("minecraft-%s-sources.jar".formatted(inputJar.getType()));
 	}
 
 	public static Path getSourcesPath(Path outputJar) {
@@ -101,10 +117,6 @@ public final class TaskBasedMinecraftConfiguration {
 	}
 
 	public static void configureIde(Project project) {
-		if (!isEnabled(project)) {
-			return;
-		}
-
 		project.getTasks().matching(task -> IDE_TASKS.contains(task.getName())).configureEach(task -> task.dependsOn(PROCESS_MINECRAFT_JARS_TASK));
 		project.getPluginManager().withPlugin("eclipse", plugin -> {
 			final EclipseModel eclipseModel = project.getExtensions().getByType(EclipseModel.class);
@@ -140,5 +152,10 @@ public final class TaskBasedMinecraftConfiguration {
 
 	private static Path normalize(Path path) {
 		return path.toAbsolutePath().normalize();
+	}
+
+	private static String getInputJarIdentity(MinecraftJar inputJar) {
+		// Mapped input paths include the Minecraft and mappings identities, plus the processor hash when applicable.
+		return Checksum.of(inputJar.getPath().toAbsolutePath().normalize().toString()).sha1().hex();
 	}
 }

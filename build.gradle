@@ -474,6 +474,8 @@ abstract class WriteActionsTestMatrix extends DefaultTask {
 
 		// Run all the unit tests together
 		testMatrix.add("net.fabricmc.loom.test.unit.*")
+		// Task implementation tests use the task package to exercise package-private helpers.
+		testMatrix.add("net.fabricmc.loom.task.*")
 
 		def output = outputFile.get().asFile
 		output.parentFile.mkdir()

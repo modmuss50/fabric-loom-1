@@ -64,13 +64,10 @@ public abstract class LoomConfigurations implements Runnable {
 			configuration.extendsFrom(minecraftServerCompile);
 		});
 
-		// Set up the minecraft runtime configurations, this extends from the compile configurations.
+		// Task-backed library runtime outputs contain their complete classpath. Keeping the compile
+		// configurations as parents would retain superseded library versions as plain file dependencies.
 		var minecraftClientRuntime = registerNonTransitive(Constants.Configurations.MINECRAFT_CLIENT_RUNTIME_LIBRARIES, Role.RESOLVABLE);
 		var minecraftServerRuntime = registerNonTransitive(Constants.Configurations.MINECRAFT_SERVER_RUNTIME_LIBRARIES, Role.RESOLVABLE);
-
-		// Runtime extends from compile
-		minecraftClientRuntime.configure(configuration -> configuration.extendsFrom(minecraftClientCompile));
-		minecraftServerRuntime.configure(configuration -> configuration.extendsFrom(minecraftServerCompile));
 
 		registerNonTransitive(Constants.Configurations.MINECRAFT_RUNTIME_LIBRARIES, Role.RESOLVABLE).configure(minecraftRuntime -> {
 			minecraftRuntime.extendsFrom(minecraftClientRuntime);
