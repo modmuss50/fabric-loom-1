@@ -1,0 +1,22 @@
+plugins {
+	id 'net.fabricmc.fabric-loom'
+}
+
+version = '1.0.0'
+
+sourceSets.main.resources.setSrcDirs(['metadata', 'extra-resources'])
+
+if (providers.gradleProperty('overrideMetadata').isPresent()) {
+	loom.fabricModJsonPath = file('overrides/selected.json')
+}
+
+dependencies {
+	minecraft 'com.mojang:minecraft:26.1.2'
+	api project(':indirect')
+}
+
+afterEvaluate {
+	assert configurations.loomSourceModMetadata.outgoing.artifacts.every {
+		it.buildDependencies.getDependencies(null).empty
+	}
+}

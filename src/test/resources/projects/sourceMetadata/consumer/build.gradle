@@ -1,0 +1,13 @@
+plugins {
+	id 'net.fabricmc.fabric-loom'
+}
+
+if (providers.gradleProperty('split').isPresent()) {
+	loom.splitEnvironmentSourceSets()
+}
+
+dependencies {
+	minecraft 'com.mojang:minecraft:26.1.2'
+	add(providers.gradleProperty('dependencyScope').getOrElse('implementation'), project(':producer'))
+	implementation project(':plain')
+}

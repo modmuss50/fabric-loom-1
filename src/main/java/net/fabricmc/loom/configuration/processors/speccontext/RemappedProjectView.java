@@ -33,6 +33,7 @@ import java.util.stream.Stream;
 import org.gradle.api.NamedDomainObjectList;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier;
 import org.gradle.api.attributes.Usage;
 
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
@@ -62,7 +63,8 @@ public interface RemappedProjectView extends ProjectView {
 				final Configuration configuration = settings.getSourceConfiguration().get().copyRecursive();
 				configuration.setCanBeConsumed(false);
 				configuration.attributes(attributes -> attributes.attribute(Usage.USAGE_ATTRIBUTE, usage));
-				return configuration.resolve().stream().map(File::toPath);
+				return configuration.getIncoming().artifactView(view -> view.componentFilter(component -> !(component instanceof ProjectComponentIdentifier)))
+						.getFiles().getFiles().stream().map(File::toPath);
 			};
 		}
 

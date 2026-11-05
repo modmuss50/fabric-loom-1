@@ -1,0 +1,7 @@
+plugins {
+	id 'net.fabricmc.fabric-loom'
+}
+
+dependencies {
+	minecraft 'com.mojang:minecraft:26.1.2'
+}

@@ -24,12 +24,12 @@
 
 package net.fabricmc.loom.configuration.processors.speccontext;
 
+import java.util.HashMap;
 import java.util.List;
-import java.util.stream.Stream;
+import java.util.Map;
 
 import org.gradle.api.Project;
-import org.gradle.api.artifacts.Configuration;
-import org.gradle.api.artifacts.ProjectDependency;
+import org.gradle.api.artifacts.component.ComponentIdentifier;
 import org.gradle.api.attributes.Usage;
 
 import net.fabricmc.loom.LoomGradleExtension;
@@ -40,10 +40,10 @@ import net.fabricmc.loom.util.gradle.GradleUtils;
 
 // Used to abstract out the Gradle API usage to ease unit testing.
 public interface ProjectView {
-	//Returns a list of Loom Projects found in the specified Configuration
-	Stream<Project> getLoomProjectDependencies(String name);
+	List<ProjectMod> getProjectMods(ArtifactUsage usage, DebofConfiguration.TargetSourceSet target);
 
-	Stream<Project> getMinecraftProjectDependencies(ArtifactUsage usage);
+	record ProjectMod(ComponentIdentifier component, FabricModJson mod) {
+	}
 
 	// Returns the mods defined in the current project
 	List<FabricModJson> getMods();
@@ -72,6 +72,7 @@ public interface ProjectView {
 	abstract class AbstractProjectView implements ProjectView {
 		protected final Project project;
 		protected final LoomGradleExtension extension;
+		private final Map<ComponentIdentifier, FabricModJson> metadataCache = new HashMap<>();
 
 		protected AbstractProjectView(Project project) {
 			this.project = project;
@@ -79,21 +80,19 @@ public interface ProjectView {
 		}
 
 		@Override
-		public Stream<Project> getMinecraftProjectDependencies(ArtifactUsage usage) {
-			final var sourceSet = extension.getMinecraftSourceSet();
-			final String configurationName = usage == ArtifactUsage.COMPILE
-					? sourceSet.getCompileClasspathConfigurationName() : sourceSet.getRuntimeClasspathConfigurationName();
-			return getLoomProjectDependencies(configurationName);
-		}
+		public List<ProjectMod> getProjectMods(ArtifactUsage usage, DebofConfiguration.TargetSourceSet target) {
+			var sourceSet = target.getSourceSet(project);
+			String configurationName;
 
-		@Override
-		public Stream<Project> getLoomProjectDependencies(String name) {
-			final Configuration configuration = project.getConfigurations().getByName(name);
-			return configuration.getAllDependencies()
-					.withType(ProjectDependency.class)
-					.stream()
-					.map((d) -> project.project(d.getPath()))
-					.filter(GradleUtils::isLoomProject);
+			if (extension.disableObfuscation()) {
+				DebofConfiguration configuration = usage == ArtifactUsage.COMPILE ? DebofConfiguration.COMPILE : DebofConfiguration.RUNTIME;
+				configurationName = configuration.getConfiguration(project, target).getName();
+			} else {
+				configurationName = usage == ArtifactUsage.COMPILE
+						? sourceSet.getCompileClasspathConfigurationName() : sourceSet.getRuntimeClasspathConfigurationName();
+			}
+
+			return SourceModMetadata.resolve(project, configurationName, metadataCache);
 		}
 
 		@Override
@@ -103,10 +102,7 @@ public interface ProjectView {
 
 		@Override
 		public boolean disableProjectDependantMods() {
-			final LoomGradleExtension extension = LoomGradleExtension.get(project);
-			// TODO provide a project isolated way of doing this.
-			return extension.isProjectIsolationActive()
-					|| GradleUtils.getBooleanProperty(project, Constants.Properties.DISABLE_PROJECT_DEPENDENT_MODS);
+			return GradleUtils.getBooleanProperty(project, Constants.Properties.DISABLE_PROJECT_DEPENDENT_MODS);
 		}
 
 		@Override

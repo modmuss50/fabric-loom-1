@@ -33,6 +33,8 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import com.google.gson.JsonObject;
@@ -122,7 +124,15 @@ public final class FabricModJsonFactory {
 
 		try {
 			JsonObject modJson = readFmjJsonObject(file);
-			return create(modJson, new FabricModJsonSource.SourceSetSource(project, sourceSets));
+			List<Path> resourceRoots = new ArrayList<>();
+
+			for (SourceSet sourceSet : sourceSets) {
+				for (File resourceRoot : sourceSet.getResources().getSrcDirs()) {
+					resourceRoots.add(resourceRoot.toPath());
+				}
+			}
+
+			return create(modJson, new FabricModJsonSource.SourceSetSource(file.toPath(), resourceRoots));
 		} catch (JsonSyntaxException e) {
 			LOGGER.warn("Failed to parse fabric.mod.json: {}", file.getAbsolutePath());
 			return null;
