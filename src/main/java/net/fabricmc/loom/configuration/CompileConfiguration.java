@@ -518,12 +518,8 @@ public abstract class CompileConfiguration implements Runnable {
 	private void releaseLock() {
 		final Path lock = getLockFile().file;
 
-		if (!Files.exists(lock)) {
-			return;
-		}
-
 		try {
-			Files.delete(lock);
+			Files.deleteIfExists(lock);
 		} catch (IOException e1) {
 			try {
 				// If we failed to delete the lock file, moving it before trying to delete it may help.
