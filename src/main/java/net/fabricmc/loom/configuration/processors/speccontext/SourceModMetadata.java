@@ -41,10 +41,11 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
-import org.gradle.api.artifacts.ProjectDependency;
+import org.gradle.api.artifacts.ModuleDependency;
 import org.gradle.api.artifacts.PublishArtifact;
 import org.gradle.api.artifacts.ResolvedArtifact;
 import org.gradle.api.artifacts.component.ComponentIdentifier;
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier;
 import org.gradle.api.attributes.Usage;
 import org.gradle.api.tasks.SourceSet;
 import org.gradle.api.tasks.TaskDependency;
@@ -121,8 +122,9 @@ public final class SourceModMetadata {
 		metadata.setTransitive(false);
 		metadata.attributes(attributes -> attributes.attribute(Usage.USAGE_ATTRIBUTE, project.getObjects().named(Usage.class, USAGE)));
 
-		for (ProjectDependency dependency : source.getAllDependencies().withType(ProjectDependency.class)) {
-			ProjectDependency copy = dependency.copy();
+		// Module dependencies can select projects through composite-build substitution.
+		for (ModuleDependency dependency : source.getAllDependencies().withType(ModuleDependency.class)) {
+			ModuleDependency copy = dependency.copy();
 			copy.setTargetConfiguration(null);
 			metadata.getDependencies().add(copy);
 		}
@@ -132,7 +134,11 @@ public final class SourceModMetadata {
 		Map<ComponentIdentifier, List<ResolvedArtifact>> components = new LinkedHashMap<>();
 
 		for (ResolvedArtifact artifact : artifacts) {
-			components.computeIfAbsent(artifact.getId().getComponentIdentifier(), key -> new ArrayList<>()).add(artifact);
+			ComponentIdentifier component = artifact.getId().getComponentIdentifier();
+
+			if (component instanceof ProjectComponentIdentifier) {
+				components.computeIfAbsent(component, key -> new ArrayList<>()).add(artifact);
+			}
 		}
 
 		List<ProjectView.ProjectMod> mods = new ArrayList<>();
@@ -144,21 +150,20 @@ public final class SourceModMetadata {
 				continue;
 			}
 
-			FabricModJson mod = cache.computeIfAbsent(entry.getKey(), key -> {
-				List<Path> roots = entry.getValue().stream()
-						.filter(artifact -> RESOURCE_ROOT.equals(artifact.getType()))
-						.sorted(Comparator.comparingInt(artifact -> Integer.parseInt(artifact.getClassifier())))
-						.map(artifact -> artifact.getFile().toPath())
-						.toList();
-				return read(project, modJson.getFile().toPath(), roots);
-			});
+			FabricModJson mod = cache.computeIfAbsent(entry.getKey(), key -> read(project, modJson, entry.getValue()));
 			mods.add(new ProjectView.ProjectMod(entry.getKey(), mod));
 		}
 
 		return List.copyOf(mods);
 	}
 
-	private static FabricModJson read(Project project, Path metadata, List<Path> roots) {
+	private static FabricModJson read(Project project, ResolvedArtifact modJson, List<ResolvedArtifact> artifacts) {
+		Path metadata = modJson.getFile().toPath();
+		List<Path> roots = artifacts.stream()
+				.filter(artifact -> RESOURCE_ROOT.equals(artifact.getType()))
+				.sorted(Comparator.comparingInt(artifact -> Integer.parseInt(artifact.getClassifier())))
+				.map(artifact -> artifact.getFile().toPath())
+				.toList();
 		var source = new FabricModJsonSource.SourceSetSource(metadata, roots);
 		String json = new String(readInput(project, metadata), StandardCharsets.UTF_8);
 		FabricModJson mod = FabricModJsonFactory.create(LoomGradlePlugin.GSON.fromJson(json, JsonObject.class), source);

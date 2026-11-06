@@ -31,6 +31,43 @@ import net.fabricmc.loom.test.util.GradleProjectTestTrait
 import static org.gradle.testkit.runner.TaskOutcome.SUCCESS
 
 class SourceModMetadataTest extends Specification implements GradleProjectTestTrait {
+	def "composite dependency metadata works without producer outputs"() {
+		given:
+		def gradle = gradleProject(project: "sourceMetadata")
+		verifyContext(gradle, ["producer"], ["producer"], [])
+		new File(gradle.projectDir, "settings.gradle").text = '''rootProject.name = 'source-metadata-test'
+include 'consumer', 'plain'
+includeBuild('producer') {
+	dependencySubstitution {
+		substitute module('example:producer') using project(':')
+	}
+}
+'''
+		new File(gradle.projectDir, "producer/settings.gradle").text = '''rootProject.name = 'producer'
+include 'indirect'
+project(':indirect').projectDir = file('../indirect')
+'''
+		def consumer = new File(gradle.projectDir, "consumer/build.gradle")
+		consumer.text = consumer.text.replace("project(':producer')", "'example:producer:1.0.0'")
+
+		when:
+		def metadata = gradle.run(task: ":consumer:help", isloatedProjects: isolated)
+
+		then:
+		metadata.task(":consumer:help").outcome == SUCCESS
+		metadata.tasks.every { !it.path.startsWith(":producer:") }
+		!new File(gradle.projectDir, "producer/build").exists()
+
+		when:
+		def compiled = gradle.run(task: ":consumer:compileJava", isloatedProjects: isolated)
+
+		then:
+		compiled.task(":consumer:compileJava").outcome == SUCCESS
+
+		where:
+		isolated << [false, true]
+	}
+
 	def "source metadata works without producer outputs and tracks referenced files"() {
 		given:
 		def gradle = gradleProject(project: "sourceMetadata")
