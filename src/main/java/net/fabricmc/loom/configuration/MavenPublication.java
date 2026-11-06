@@ -57,7 +57,7 @@ public abstract class MavenPublication implements Runnable {
 			JavaPlugin.API_ELEMENTS_CONFIGURATION_NAME, "compile",
 			JavaPlugin.RUNTIME_ELEMENTS_CONFIGURATION_NAME, "runtime"
 	);
-	private static final Set<Publication> EXCLUDED_PUBLICATIONS = Collections.newSetFromMap(new WeakHashMap<>());
+	private static final Set<Publication> EXCLUDED_PUBLICATIONS = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 
 	@Inject
 	protected abstract Project getProject();
