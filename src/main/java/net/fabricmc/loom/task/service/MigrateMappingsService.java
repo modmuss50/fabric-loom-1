@@ -75,7 +75,7 @@ public final class MigrateMappingsService extends Service<MigrateMappingsService
 		classpath.from(project.getConfigurations().named(extension.getMinecraftSourceSet().getCompileClasspathConfigurationName()));
 		// Question: why are both of these needed?
 		classpath.from(extension.getMinecraftJars(MappingsNamespace.INTERMEDIARY));
-		classpath.from(extension.getMinecraftJars(MappingsNamespace.NAMED));
+		classpath.from(extension.getNamedMinecraftJars());
 
 		return TYPE.create(project, (o) -> {
 			Provider<File> targetMappingsFile = getTargetMappingsFile(project, targetMappings.get());

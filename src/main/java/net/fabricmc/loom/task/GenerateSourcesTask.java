@@ -48,8 +48,10 @@ import java.util.stream.Collectors;
 import javax.inject.Inject;
 
 import org.gradle.api.file.ConfigurableFileCollection;
+import org.gradle.api.file.RegularFile;
 import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.Property;
+import org.gradle.api.provider.Provider;
 import org.gradle.api.services.ServiceReference;
 import org.gradle.api.tasks.Classpath;
 import org.gradle.api.tasks.Input;
@@ -126,7 +128,10 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 
 	// Contains the remapped linenumbers
 	@OutputFile
-	protected abstract RegularFileProperty getClassesOutputJar();
+	public abstract RegularFileProperty getClassesOutputJar();
+
+	@Input
+	protected abstract Property<Boolean> getAlwaysWriteClassesJar();
 
 	@Input
 	@Option(option = "use-cache", description = "Use the decompile cache")
@@ -228,6 +233,7 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 		getDecompileCacheFile().set(getExtension().getFiles().getDecompileCache(CACHE_VERSION));
 
 		getUseCache().convention(true);
+		getAlwaysWriteClassesJar().convention(false);
 		getResetCache().convention(getExtension().refreshDeps());
 
 		getMappings().set(SourceMappingsService.create(getProject()));
@@ -246,6 +252,14 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 		getDaemonUtilsContext().set(getProject().getObjects().newInstance(DaemonUtils.Context.class, getProject()));
 
 		mustRunAfter(getProject().getTasks().withType(AbstractRemapJarTask.class));
+	}
+
+	@ApiStatus.Internal
+	public void useProcessedJar(Provider<RegularFile> processedJar, String outputSuffix) {
+		getClassesInputJar().set(processedJar);
+		getClassesOutputJar().fileProvider(processedJar.map(jar -> getJarFileWithSuffix("-line-mapped" + outputSuffix + ".jar", jar.getAsFile().toPath())));
+		getSourcesOutputJar().fileProvider(processedJar.map(jar -> getJarFileWithSuffix("-sources" + outputSuffix + ".jar", jar.getAsFile().toPath())));
+		getAlwaysWriteClassesJar().set(true);
 	}
 
 	@TaskAction
@@ -400,6 +414,11 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 	private void applyLineNumbers(@Nullable ClassLineNumbers lineNumbers, Path classesInputJar, Path classesOutputJar) throws IOException {
 		if (lineNumbers == null) {
 			getLogger().info("No line numbers to remap, skipping remapping");
+
+			if (getAlwaysWriteClassesJar().get()) {
+				Files.copy(classesInputJar, classesOutputJar, StandardCopyOption.REPLACE_EXISTING);
+			}
+
 			return;
 		}
 
@@ -480,7 +499,8 @@ public abstract class GenerateSourcesTask extends AbstractLoomTask {
 		final var remapper = new LineNumberRemapper(lineNumbers);
 		remapper.process(inputJar, outputJar);
 
-		final Path lineMap = inputJar.resolveSibling(inputJar.getFileName() + ".linemap.txt");
+		final Path lineMapBase = getAlwaysWriteClassesJar().get() ? getClassesOutputJar().get().getAsFile().toPath() : inputJar;
+		final Path lineMap = lineMapBase.resolveSibling(lineMapBase.getFileName() + ".linemap.txt");
 
 		try (BufferedWriter writer = Files.newBufferedWriter(lineMap)) {
 			lineNumbers.write(writer);

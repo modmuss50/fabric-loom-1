@@ -225,7 +225,7 @@ public abstract class AbstractMappedMinecraftProvider<M extends MinecraftProvide
 		return "%s-%s".formatted(extension.getMinecraftProvider().minecraftVersion(), extension.getMappingConfiguration().mappingsIdentifier());
 	}
 
-	protected String getDependencyNotation(MinecraftJar.Type type) {
+	public String getDependencyNotation(MinecraftJar.Type type) {
 		return "net.minecraft:%s:%s".formatted(getName(type), getVersion());
 	}
 

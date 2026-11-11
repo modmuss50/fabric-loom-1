@@ -25,6 +25,8 @@
 package net.fabricmc.loom.extension;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -62,9 +64,11 @@ import net.fabricmc.loom.api.mappings.intermediate.IntermediateMappingsProvider;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
 import net.fabricmc.loom.api.mappings.layered.spec.LayeredMappingSpecBuilder;
 import net.fabricmc.loom.api.processor.MinecraftJarProcessor;
+import net.fabricmc.loom.api.processor.MinecraftJarProcessingTask;
 import net.fabricmc.loom.api.remapping.RemapperExtension;
 import net.fabricmc.loom.api.remapping.RemapperParameters;
 import net.fabricmc.loom.configuration.IncludeConfigurations;
+import net.fabricmc.loom.configuration.decompile.DecompileConfiguration;
 import net.fabricmc.loom.configuration.RemapConfigurations;
 import net.fabricmc.loom.configuration.ide.RunConfigSettings;
 import net.fabricmc.loom.configuration.mods.ArtifactMetadata;
@@ -73,6 +77,7 @@ import net.fabricmc.loom.configuration.providers.mappings.LayeredMappingSpec;
 import net.fabricmc.loom.configuration.providers.mappings.LayeredMappingSpecBuilderImpl;
 import net.fabricmc.loom.configuration.providers.mappings.LayeredMappingsFactory;
 import net.fabricmc.loom.configuration.providers.minecraft.ManifestLocations;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJar;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJarConfiguration;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftMetadataProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftSourceSets;
@@ -119,6 +124,7 @@ public abstract class LoomGradleExtensionApiImpl implements LoomGradleExtensionA
 	private final NamedDomainObjectContainer<ModSettings> mods;
 	private final NamedDomainObjectList<RemapConfigurationSettings> remapConfigurations;
 	private final ListProperty<MinecraftJarProcessor<?>> minecraftJarProcessors;
+	private final Map<MinecraftJar.Type, List<TaskProvider<? extends MinecraftJarProcessingTask>>> minecraftJarProcessingTasks = new EnumMap<>(MinecraftJar.Type.class);
 	protected final ListProperty<RemapperExtensionHolder> remapperExtensions;
 
 	// A common mistake with layered mappings is to call the wrong `officialMojangMappings` method, use this to keep track of when we are building a layered mapping spec.
@@ -267,6 +273,15 @@ public abstract class LoomGradleExtensionApiImpl implements LoomGradleExtensionA
 	@Override
 	public void addMinecraftJarProcessor(Class<? extends MinecraftJarProcessor<?>> clazz, Object... parameters) {
 		getMinecraftJarProcessors().add(getProject().getObjects().newInstance(clazz, parameters));
+	}
+
+	@Override
+	public void addMinecraftJarProcessingTask(MinecraftJar.Type type, TaskProvider<? extends MinecraftJarProcessingTask> task) {
+		minecraftJarProcessingTasks.computeIfAbsent(type, ignored -> new ArrayList<>()).add(task);
+	}
+
+	public List<TaskProvider<? extends MinecraftJarProcessingTask>> getMinecraftJarProcessingTasks(MinecraftJar.Type type) {
+		return List.copyOf(minecraftJarProcessingTasks.getOrDefault(type, List.of()));
 	}
 
 	@Override
@@ -570,8 +585,42 @@ public abstract class LoomGradleExtensionApiImpl implements LoomGradleExtensionA
 
 	@Override
 	public FileCollection getNamedMinecraftJars() {
+		return getNamedMinecraftJars(true);
+	}
+
+	public FileCollection getProcessedNamedMinecraftJars() {
+		return getNamedMinecraftJars(false);
+	}
+
+	private FileCollection getNamedMinecraftJars(boolean includeGeneratedSources) {
 		final ConfigurableFileCollection jars = getProject().getObjects().fileCollection();
-		jars.from(getProject().provider(() -> LoomGradleExtension.get(getProject()).getMinecraftJars(MappingsNamespace.NAMED)));
+		jars.from(getProject().provider(() -> {
+			final LoomGradleExtension extension = LoomGradleExtension.get(getProject());
+			final ConfigurableFileCollection outputJars = getProject().getObjects().fileCollection();
+
+			for (MinecraftJar minecraftJar : extension.getNamedMinecraftProvider().getMinecraftJars()) {
+				final List<TaskProvider<? extends MinecraftJarProcessingTask>> tasks = extension.getMinecraftJarProcessingTasks(minecraftJar.getType());
+
+				if (tasks.isEmpty()) {
+					outputJars.from(minecraftJar.toFile());
+					continue;
+				}
+
+				final TaskProvider<? extends MinecraftJarProcessingTask> finalTask = tasks.getLast();
+
+				if (includeGeneratedSources && DecompileConfiguration.generateSourcesByDefault(getProject())) {
+					final String sourceTaskName = DecompileConfiguration.getDefaultTaskName(minecraftJar.getType());
+					outputJars.from(getProject().provider(() -> getProject().getTasks().named(sourceTaskName, GenerateSourcesTask.class)
+							.get().getClassesOutputJar().getLocationOnly().get().getAsFile()));
+					outputJars.builtBy(sourceTaskName);
+				} else {
+					outputJars.from(finalTask.flatMap(MinecraftJarProcessingTask::getOutputJar));
+					outputJars.builtBy(finalTask);
+				}
+			}
+
+			return outputJars;
+		}));
 		return jars;
 	}
 

@@ -150,6 +150,12 @@ public class Constants {
 		public static final String DISABLE_REMAPPED_VARIANTS = "fabric.loom.disableRemappedVariants";
 		public static final String DISABLE_PROJECT_DEPENDENT_MODS = "fabric.loom.disableProjectDependentMods";
 		public static final String LIBRARY_PROCESSORS = "fabric.loom.libraryProcessors";
+		/**
+		 * Controls whether source generation is the final Minecraft jar processing step.
+		 * Defaults to true outside CI and false on CI when jar processing tasks are registered.
+		 */
+		@ApiStatus.Experimental
+		public static final String MINECRAFT_JAR_PROCESSING_GENERATE_SOURCES = "fabric.loom.experimental.minecraftJarProcessing.generateSources";
 		@ApiStatus.Experimental
 		public static final String SANDBOX = "fabric.loom.experimental.sandbox";
 		/**

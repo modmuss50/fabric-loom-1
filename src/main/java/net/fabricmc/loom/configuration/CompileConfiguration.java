@@ -33,6 +33,9 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 
@@ -49,6 +52,7 @@ import org.gradle.api.provider.Provider;
 import org.gradle.api.tasks.AbstractCopyTask;
 import org.gradle.api.tasks.SourceSet;
 import org.gradle.api.tasks.TaskContainer;
+import org.gradle.api.tasks.TaskProvider;
 import org.gradle.api.tasks.compile.JavaCompile;
 import org.gradle.api.tasks.javadoc.Javadoc;
 import org.gradle.api.tasks.testing.Test;
@@ -56,11 +60,13 @@ import org.jspecify.annotations.Nullable;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.api.InterfaceInjectionExtensionAPI;
+import net.fabricmc.loom.api.processor.MinecraftJarProcessingTask;
 import net.fabricmc.loom.build.mixin.GroovyApInvoker;
 import net.fabricmc.loom.build.mixin.JavaApInvoker;
 import net.fabricmc.loom.build.mixin.KaptApInvoker;
 import net.fabricmc.loom.build.mixin.ScalaApInvoker;
 import net.fabricmc.loom.configuration.accesswidener.AccessWidenerJarProcessor;
+import net.fabricmc.loom.configuration.decompile.DecompileConfiguration;
 import net.fabricmc.loom.configuration.ifaceinject.InterfaceInjectionProcessor;
 import net.fabricmc.loom.configuration.processors.JsrAnnotationRemapperProcessor;
 import net.fabricmc.loom.configuration.processors.MinecraftJarProcessorManager;
@@ -71,6 +77,7 @@ import net.fabricmc.loom.configuration.providers.mappings.MappingConfiguration;
 import net.fabricmc.loom.configuration.providers.mappings.NoRemapMappingConfiguration;
 import net.fabricmc.loom.configuration.providers.mappings.RemapMappingConfiguration;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftCacheLocks;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJar;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftMetadataProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftSourceSets;
@@ -78,6 +85,7 @@ import net.fabricmc.loom.configuration.providers.minecraft.mapped.AbstractMapped
 import net.fabricmc.loom.configuration.providers.minecraft.mapped.IntermediaryMinecraftProvider;
 import net.fabricmc.loom.configuration.providers.minecraft.mapped.NamedMinecraftProvider;
 import net.fabricmc.loom.extension.MixinExtension;
+import net.fabricmc.loom.task.GenerateSourcesTask;
 import net.fabricmc.loom.task.service.ClasspathGroupService;
 import net.fabricmc.loom.util.Checksum;
 import net.fabricmc.loom.util.ExceptionUtil;
@@ -281,7 +289,66 @@ public abstract class CompileConfiguration implements Runnable {
 			intermediaryMinecraftProvider.applyDependencies();
 		}
 
-		namedMinecraftProvider.applyDependencies();
+		applyNamedMinecraftDependencies(namedMinecraftProvider);
+	}
+
+	private void applyNamedMinecraftDependencies(NamedMinecraftProvider<?> namedMinecraftProvider) {
+		final LoomGradleExtension extension = LoomGradleExtension.get(getProject());
+
+		if (namedMinecraftProvider.getDependencyTypes().stream().noneMatch(type -> !extension.getMinecraftJarProcessingTasks(type).isEmpty())) {
+			namedMinecraftProvider.applyDependencies();
+			return;
+		}
+
+		final Map<MinecraftJar.Type, Object> dependencies = new EnumMap<>(MinecraftJar.Type.class);
+
+		for (MinecraftJar minecraftJar : namedMinecraftProvider.getMinecraftJars()) {
+			final MinecraftJar.Type type = minecraftJar.getType();
+			final List<TaskProvider<? extends MinecraftJarProcessingTask>> tasks = extension.getMinecraftJarProcessingTasks(type);
+
+			if (tasks.isEmpty()) {
+				dependencies.put(type, namedMinecraftProvider.getDependencyNotation(type));
+				continue;
+			}
+
+			TaskProvider<? extends MinecraftJarProcessingTask> previousTask = null;
+
+			for (TaskProvider<? extends MinecraftJarProcessingTask> taskProvider : tasks) {
+				final TaskProvider<? extends MinecraftJarProcessingTask> precedingTask = previousTask;
+				taskProvider.configure(task -> {
+					if (precedingTask == null) {
+						task.getInputJar().fileValue(minecraftJar.toFile());
+					} else {
+						task.getInputJar().set(precedingTask.flatMap(MinecraftJarProcessingTask::getOutputJar));
+					}
+				});
+				previousTask = taskProvider;
+			}
+
+			final var outputFiles = getProject().getObjects().fileCollection();
+
+			if (DecompileConfiguration.generateSourcesByDefault(getProject())) {
+				final String sourceTaskName = DecompileConfiguration.getDefaultTaskName(type);
+				outputFiles.from(getProject().provider(() -> getTasks().named(sourceTaskName, GenerateSourcesTask.class)
+						.get().getClassesOutputJar().getLocationOnly().get().getAsFile()));
+				outputFiles.builtBy(sourceTaskName);
+			} else {
+				outputFiles.from(previousTask.flatMap(MinecraftJarProcessingTask::getOutputJar));
+				outputFiles.builtBy(previousTask);
+			}
+
+			dependencies.put(type, outputFiles);
+		}
+
+		MinecraftSourceSets.get(getProject()).applyDependencies((configuration, type) -> {
+			final Object dependency = dependencies.get(type);
+
+			if (dependency == null) {
+				throw new IllegalStateException("Missing Minecraft jar for type: " + type);
+			}
+
+			getProject().getDependencies().add(configuration, dependency);
+		}, namedMinecraftProvider.getDependencyTypes());
 	}
 
 	private void registerGameProcessors(ConfigContext configContext) {

@@ -56,8 +56,7 @@ public class SingleJarDecompileConfiguration extends DecompileConfiguration<Mapp
 			String taskName = "%sWith%s".formatted(taskBaseName, decompilerName);
 			// Decompiler will be passed to the constructor of GenerateSourcesTask
 			project.getTasks().register(taskName, GenerateSourcesTask.class, options).configure(task -> {
-				task.getInputJarName().set(minecraftJar.getName());
-				task.getSourcesOutputJar().fileValue(GenerateSourcesTask.getJarFileWithSuffix("-sources.jar", minecraftJar.getPath()));
+				configureJar(task, minecraftJar, decompilerName);
 
 				task.dependsOn(project.getTasks().named("validateAccessWidener"));
 				task.setDescription("Decompile minecraft using %s.".formatted(decompilerName));

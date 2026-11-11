@@ -51,11 +51,13 @@ import net.fabricmc.loom.api.manifest.VersionsManifestsAPI;
 import net.fabricmc.loom.api.mappings.intermediate.IntermediateMappingsProvider;
 import net.fabricmc.loom.api.mappings.layered.spec.LayeredMappingSpecBuilder;
 import net.fabricmc.loom.api.processor.MinecraftJarProcessor;
+import net.fabricmc.loom.api.processor.MinecraftJarProcessingTask;
 import net.fabricmc.loom.api.remapping.RemapperExtension;
 import net.fabricmc.loom.api.remapping.RemapperParameters;
 import net.fabricmc.loom.configuration.ide.RunConfigSettings;
 import net.fabricmc.loom.configuration.processors.JarProcessor;
 import net.fabricmc.loom.configuration.providers.minecraft.ManifestLocations;
+import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJar;
 import net.fabricmc.loom.configuration.providers.minecraft.MinecraftJarConfiguration;
 import net.fabricmc.loom.task.GenerateSourcesTask;
 import net.fabricmc.loom.util.DeprecationHelper;
@@ -100,6 +102,14 @@ public interface LoomGradleExtensionAPI {
 	ListProperty<MinecraftJarProcessor<?>> getMinecraftJarProcessors();
 
 	void addMinecraftJarProcessor(Class<? extends MinecraftJarProcessor<?>> clazz, Object... parameters);
+
+	/**
+	 * Appends a task to the processing chain for the given named Minecraft jar type.
+	 * Loom sets its input to the previous step's output, or to the prepared jar for the first step.
+	 * Tasks run in registration order. Registering a step opts this jar type into task-based processing.
+	 */
+	@ApiStatus.Experimental
+	void addMinecraftJarProcessingTask(MinecraftJar.Type type, TaskProvider<? extends MinecraftJarProcessingTask> task);
 
 	ConfigurableFileCollection getLog4jConfigs();
 
@@ -321,7 +331,7 @@ public interface LoomGradleExtensionAPI {
 	Provider<String> getMinecraftVersion();
 
 	/**
-	 * @return A lazily evaluated {@link FileCollection} containing the named minecraft jars.
+	 * @return A lazily evaluated {@link FileCollection} containing the final named Minecraft jars.
 	 */
 	FileCollection getNamedMinecraftJars();
 

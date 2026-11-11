@@ -236,6 +236,10 @@ public abstract class LoomGradleExtensionImpl extends LoomGradleExtensionApiImpl
 
 	@Override
 	public FileCollection getMinecraftJarsCollection(MappingsNamespace mappingsNamespace) {
+		if (mappingsNamespace == MappingsNamespace.NAMED) {
+			return getNamedMinecraftJars();
+		}
+
 		return getProject().files(
 			getProject().provider(() ->
 				getProject().files(getMinecraftJars(mappingsNamespace).stream().map(Path::toFile).toList())
